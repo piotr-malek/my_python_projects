@@ -1,9 +1,9 @@
 import sys
 import logging
-from trello.errors import ConfigError, FetchError
 from trello.config import Config
 from trello.fetch import fetch_cards
 from trello.utils import process_and_print_cards, parse_arguments
+from trello.errors import ConfigError, FetchError
 
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
