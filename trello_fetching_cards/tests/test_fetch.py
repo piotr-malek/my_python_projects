@@ -25,7 +25,6 @@ def test_fetch_cards_success(config):
         status=200
     )
 
-    # Execute the fetch_cards function and collect results from generator
     fetched_cards = list(fetch_cards(config))
 
     assert len(fetched_cards) == 1 # Check that we fetched exactly one batch of cards
@@ -38,7 +37,6 @@ def test_fetch_cards_success(config):
 def test_fetch_cards_http_error(temp_config_file):
     url = "https://api.trello.com/1/boards/fake_board_id/cards"
     
-    # Ensure the URL matches exactly what is being requested
     responses.add(responses.GET, url, status=404)
     
     config_file_path = temp_config_file()

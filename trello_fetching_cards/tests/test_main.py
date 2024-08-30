@@ -45,8 +45,7 @@ def test_main_missing_argument(monkeypatch):
     assert e.value.code == 2 
 
 def test_main_empty_config_file(monkeypatch, temp_config_file):
-    # Create a temporary config file with an invalid structure (e.g., just `{}`)
-    config_file_path = temp_config_file("{}")  # This will simulate a truly "empty" JSON structure
+    config_file_path = temp_config_file("{}")  # Empty JSON structure
 
     monkeypatch.setattr('sys.argv', ['script_name', config_file_path])
 

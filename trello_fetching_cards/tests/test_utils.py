@@ -34,9 +34,8 @@ def test_extract_nested_field(record, field, expected_result):
 # process_and_print_cards tests
 def test_process_and_print_cards_no_data():
     def empty_fetch_cards(_):
-        yield from []  # This simulates an empty generator
+        yield from []  # Simulates an empty generator
 
-    # Expect FetchError when process_and_print_cards is called with no data
     with pytest.raises(FetchError, match="No data found"):
         process_and_print_cards(empty_fetch_cards(None), fields=['id', 'name'])
 
