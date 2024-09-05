@@ -13,14 +13,20 @@ def valid_config_data():
 
 @pytest.fixture
 def temp_config_file(valid_config_data):
-    """Creates a temporary configuration file from valid_config_data."""
+    """Creates a temporary configuration file. Supports empty data if provided."""
     def _create_temp_file(data=None):
-        # Use default valid_config_data if no data is provided
-        data_to_write = data if data else valid_config_data
         temp_file = tempfile.NamedTemporaryFile(delete=False, mode='w')
-        json.dump(data_to_write, temp_file)
+
+        # Write the data if provided, otherwise use default valid config data
+        if data is not None:
+            if data:  # Only dump if data is not empty
+                json.dump(data, temp_file)
+        else:
+            json.dump(valid_config_data, temp_file)
+
         temp_file.close()
         return temp_file.name
+
     return _create_temp_file
 
 @pytest.fixture

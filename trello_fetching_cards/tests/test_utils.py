@@ -32,13 +32,6 @@ def test_extract_nested_field(record, field, expected_result):
     assert extract_nested_field(record, field) == expected_result
 
 # process_and_print_cards tests
-def test_process_and_print_cards_no_data():
-    def empty_fetch_cards(_):
-        yield from []  # Simulates an empty generator
-
-    with pytest.raises(FetchError, match="No data found"):
-        process_and_print_cards(empty_fetch_cards(None), fields=['id', 'name'])
-
 def test_process_and_print_cards_with_fields(capfd):
     cards = [{'id': 'card_id', 'name': 'Card Name', 'badges': {'comments': 2}}]
     process_and_print_cards(cards, ['id', 'name', 'badges.comments'])

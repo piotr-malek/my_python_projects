@@ -14,12 +14,10 @@ def main() -> None:
         args = parse_arguments()
         config = Config.from_file(args.config_path)
 
-        any_cards_fetched = False
-        for cards_batch in fetch_cards(config):
-            if not any_cards_fetched and len(cards_batch) > 0:
-                any_cards_fetched = True
-
-            process_and_print_cards(cards_batch, config.fields)
+        for card in fetch_cards(config):
+            process_and_print_cards([card], config.fields)
+        else:
+            logger.warning("Board has no cards.")  # Executed if no cards were yielded.
 
     except ConfigError as e:
         logger.error(f"Configuration error: {e}")

@@ -27,11 +27,11 @@ def test_fetch_cards_success(config):
 
     fetched_cards = list(fetch_cards(config))
 
-    assert len(fetched_cards) == 1 # Check that we fetched exactly one batch of cards
-    assert len(fetched_cards[0]) == 1 # Check that the batch contains exactly one card
+    # Since fetch_cards returns a flat list of cards, the length should be 1
+    assert len(fetched_cards) == 1  # We fetched exactly one card
     # Validate the content of the fetched card
-    assert fetched_cards[0][0]['id'] == '1'
-    assert fetched_cards[0][0]['name'] == 'First Card'
+    assert fetched_cards[0]['id'] == '1'
+    assert fetched_cards[0]['name'] == 'First Card'
 
 @responses.activate
 def test_fetch_cards_http_error(temp_config_file):

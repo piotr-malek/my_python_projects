@@ -1,4 +1,5 @@
 import pytest
+import logging
 from unittest import mock
 from trello.main import main
 from trello.errors import FetchError
@@ -45,7 +46,7 @@ def test_main_missing_argument(monkeypatch):
     assert e.value.code == 2 
 
 def test_main_empty_config_file(monkeypatch, temp_config_file):
-    config_file_path = temp_config_file("{}")  # Empty JSON structure
+    config_file_path = temp_config_file({'credential': {}})  # Empty JSON structure with missing fields
 
     monkeypatch.setattr('sys.argv', ['script_name', config_file_path])
 
@@ -64,11 +65,17 @@ def test_main_malformed_json(monkeypatch):
         assert e.type == SystemExit
         assert e.value.code == 1
 
-def test_main_no_cards(monkeypatch, temp_config_file):
+def test_main_no_cards(monkeypatch, temp_config_file, caplog):
     config_file_path = temp_config_file()
     monkeypatch.setattr('sys.argv', ['script_name', config_file_path])
-    with mock.patch('trello.main.fetch_cards', return_value=[[]]):  # Empty batch (simulate no cards)
-        with pytest.raises(SystemExit) as e:
+
+    # Mock fetch_cards to return an empty iterator (simulate no cards)
+    with mock.patch('trello.main.fetch_cards', return_value=iter([])):
+        with caplog.at_level(logging.WARNING):
             main()
-        assert e.type == SystemExit
-        assert e.value.code == 2
+
+    # Check that the warning about no cards was logged
+    assert "Board has no cards." in caplog.text
+
+    # Ensure that it does not raise SystemExit
+    assert not any(record.levelname == 'ERROR' for record in caplog.records)

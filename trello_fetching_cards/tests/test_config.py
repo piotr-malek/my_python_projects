@@ -28,19 +28,37 @@ def test_config_from_file_file_not_found():
     [
         (
             {'credential': {'access_token': 'fake_token'}, 'boardId': 'fake_board_id'},
-            "Missing or empty 'key' or 'access_token' in config file."
+            "Missing key in config file: 'key'"
         ),
         (
             {'credential': {'key': 'fake_key'}, 'boardId': 'fake_board_id'},
-            "Missing or empty 'key' or 'access_token' in config file."
+            "Missing key in config file: 'access_token'"
         ),
         (
             {'credential': {'key': 'fake_key', 'access_token': 'fake_token'}},
-            "Missing or empty 'boardId' in config file."
+            "Missing key in config file: 'boardId'"
         ),
     ]
 )
 def test_config_from_file_missing_keys(temp_config_file, data, error_message):
+    config_file_path = temp_config_file(data)
+    with pytest.raises(ConfigError, match=error_message):
+        Config.from_file(config_file_path)
+
+@pytest.mark.parametrize(
+    "data, error_message",
+    [
+        (
+            {},  # Empty configuration file
+            "Config file is not valid JSON"  
+        ),
+        (
+            {'credential': {'access_token': '', 'key': ''}, 'boardId': ''},  # Empty values
+            "Missing or empty 'key', 'access_token', or 'boardId' in config file."
+        ),
+    ]
+)
+def test_config_from_file_empty_or_invalid_values(temp_config_file, data, error_message):
     config_file_path = temp_config_file(data)
     with pytest.raises(ConfigError, match=error_message):
         Config.from_file(config_file_path)

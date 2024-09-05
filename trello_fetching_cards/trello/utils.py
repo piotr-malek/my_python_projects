@@ -18,12 +18,8 @@ def extract_nested_field(record: Dict[str, Any], field: str) -> Optional[Any]:
 
 def process_and_print_cards(cards: List[Dict[str, Any]], fields: Optional[List[str]]) -> None:
     """Processes and prints the fetched Trello cards according to specified fields."""
-    cards_list = list(cards)  # Convert generator to list to check if it's empty
-
-    if not cards_list:  # If no cards were fetched
-        raise FetchError("No data found")
-
-    for card in cards_list:
+    
+    for card in cards:
         if fields:
             output = {}
             for field in fields:
