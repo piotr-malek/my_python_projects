@@ -1,44 +1,21 @@
-# 🛠️ Data Engineering & Automation Portfolio
+Hi, I'm Piotr, I'm an analytics engineer. Here are some of my personal projects:
 
-Welcome! I'm Piotr, and here's a curated look at the projects that reflect my capabilities in **data engineering**, **automation**, and **API integration**. I focus on building robust pipelines, integrating external data sources, and deploying end-to-end data solutions.
+- [Strava Personal Dashboard](https://github.com/piotr-malek/my_python_projects/blob/main/strava_activities.ipynb)
+  - End-to-end pipeline that extracts personal Strava activities using OAuth, transforms the data, loads it into Google Sheets, and automates updates to a Looker Studio dashboard.
+  - OAuth, APIs, Google Sheets automation, Looker Studio
 
----
+- [Bird Migration Analysis](https://github.com/piotr-malek/my_python_projects/tree/main/birding)
+  - End-to-end data pipeline that analyzes bird migration patterns and correlations with weather data. Collects data from eBird and OpenMeteo APIs, transforms it using dbt in BigQuery, and generates analytical models for migration timing analysis.
+  - APIs, dbt, BigQuery, SQL, data modeling
 
-## 🔧 Featured Projects
+- [Garmin AI Training Coach](https://github.com/piotr-malek/my_python_projects/tree/main/garmin_ai)
+  - Personal training coach that integrates Garmin fitness data with Gemini AI to provide personalized workout analysis, recovery insights, and training plan adjustments based on activity history, sleep, and health metrics.
+  - APIs, LLMs (Gemini), Google Sheets
 
-### 🚴 Strava Personal Dashboard
-**OAuth integration | API data extraction | Google Sheets automation | Looker Studio visualization**
+- [Trello Card Automation](https://github.com/piotr-malek/my_python_projects/tree/main/trello_fetching_cards)
+  - Script that fetches Trello cards with robust error handling and testing.
+  - APIs, error handling, unit testing
 
-Built an end-to-end pipeline to extract personal Strava activities using OAuth, transform the data, load it into Google Sheets, and automate updates into a Looker Studio dashboard.
-
-→ [View code](https://github.com/piotr-malek/my_python_projects/blob/main/strava_activities.ipynb)
-
----
-
-### 📝 Trello Card Automation
-**API integration | Error handling | Unit testing**
-
-Created a script to fetch Trello cards with robust error handling and testing.
-
-→ [View code](https://github.com/piotr-malek/my_python_projects/tree/main/trello_fetching_cards)
-
----
-
-### 🌡️ Urban Heat Island (Singapore)
-**API integration | Data wrangling | Visualization**
-
-Pulled environmental and climate data from multiple APIs, performed exploratory analysis, and visualized heat patterns in Singapore.
-
-→ [View notebook](https://github.com/piotr-malek/my_python_projects/blob/main/uhi_singapore.ipynb)
-
----
-
-## 🧰 Other Projects (lighter scope)
-
-- [London biking dataset](https://github.com/piotr-malek/my_python_projects/blob/main/London_biking.ipynb) — basic EDA  
-- [Spotify top songs](https://github.com/piotr-malek/my_python_projects/blob/main/spotify_songs.ipynb) — data cleaning and exploration  
-- [World Bank indicators](https://github.com/piotr-malek/my_python_projects/blob/main/world_bank_data.ipynb) — public API extraction + visualization  
-
----
-
-Thanks for stopping by!
+- [Urban Heat Island (Singapore)](https://github.com/piotr-malek/my_python_projects/blob/main/uhi_singapore.ipynb)
+  - Collects environmental and climate data from multiple APIs, performs exploratory analysis, and visualizes heat patterns in Singapore.
+  - APIs, data wrangling, visualization

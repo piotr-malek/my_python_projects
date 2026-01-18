@@ -9,7 +9,14 @@ logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %
 logger = logging.getLogger(__name__)
 
 def main() -> None:
-    """Main function that orchestrates the fetching and processing of Trello cards."""
+    """
+    Main function that orchestrates the fetching and processing of Trello cards.
+    
+    Exit Codes:
+    1 - Configuration error
+    2 - Fetching from Trello API error
+    3 - Unexpected error
+    """
     try:
         args = parse_arguments()
         config = Config.from_file(args.config_path)
@@ -28,13 +35,6 @@ def main() -> None:
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}")
         sys.exit(3)
-
-    """
-    Exit Codes:
-    1 - Configuration error
-    2 - Fetching from Trello API error
-    3 - Unexpected error
-    """
 
 if __name__ == "__main__":
     main()

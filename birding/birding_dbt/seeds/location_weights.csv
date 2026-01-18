@@ -1,0 +1,9 @@
+metric,class,wintering,stopover_1,stopover_2,arrival
+temp_score,Sustained,0.30,0.40,0.20,0.10
+sun_score,Sustained,0.30,0.40,0.20,0.10
+wind_alignment_score,Event,0.10,0.35,0.35,0.20
+aligned_wind_5plus_score,Event,0.10,0.35,0.35,0.20
+rain_intensity_score,Event,0.10,0.35,0.35,0.20
+rain_10mm_plus_score,Event,0.10,0.35,0.35,0.20
+moderate_rain_score,Event,0.10,0.35,0.35,0.20
+insect_presence_score,Sustained,0.30,0.40,0.20,0.10

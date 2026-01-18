@@ -1,0 +1,105 @@
+version: 2
+
+models:
+  - name: mart_arrival_metrics_condensed
+    description: >
+      Condenses raw daily and chunk-level weather metrics into single, interpretable scores per (bird, arrival_year, location_name).
+      The goal is to summarize short-term fluctuations, multi-day trends, and entire-period conditions into meaningful features
+      for regression or predictive modeling of bird migration patterns.
+
+    columns:
+      - name: bird
+        description: Bird species identifier
+      - name: arrival_year
+        description: Year of migration/arrival
+      - name: location_name
+        description: Location identifier
+      - name: temp_score
+        description: >
+          Temperature score (-2 to 2 z-score scale). Weighted combination:
+          50% period average, 30% chunk metrics, 20% daily metrics.
+          Higher values indicate more favorable temperature conditions for migration.
+      - name: sun_score
+        description: >
+          Sunshine duration score (-2 to 2 z-score scale). Weighted combination:
+          50% period average, 30% chunk metrics, 20% daily metrics.
+          Higher values indicate more favorable sunlight conditions.
+      - name: wind_alignment_score
+        description: >
+          Wind alignment score (-2 to 2 z-score scale). Weighted combination:
+          30% period average, 35% chunk metrics, 35% daily metrics.
+          Higher values indicate better wind conditions for migration.
+      - name: aligned_wind_5plus_score
+        description: >
+          Score for days with aligned wind >= 5 m/s (-2 to 2 z-score scale).
+          30% period, 35% chunk, 35% daily weighting.
+      - name: rain_intensity_score
+        description: >
+          Rainfall intensity score (-2 to 2 z-score scale).
+          30% period, 35% chunk, 35% daily weighting.
+          Higher values indicate stronger rainfall compared to historical norms.
+      - name: rain_10mm_plus_score
+        description: >
+          Score for days with rainfall >= 10mm (-2 to 2 z-score scale).
+          30% period, 35% chunk, 35% daily weighting.
+      - name: moderate_rain_score
+        description: >
+          Score for days with moderate rainfall (-2 to 2 z-score scale).
+          30% period, 35% chunk, 35% daily weighting.
+
+  - name: mart_insect_metrics_condensed
+    description: >
+      Condenses daily and chunk-level metrics into single, interpretable scores per (bird, arrival_year, location_name)
+      to measure insect activity conditions. Combines short-term fluctuations and multi-day trends into features
+      for modeling insect presence and activity levels.
+
+    columns:
+      - name: bird
+        description: Bird species identifier (used for linking with migration data)
+      - name: arrival_year
+        description: Year of observation
+      - name: location_name
+        description: Location identifier
+      - name: tmean_score
+        description: >
+          Mean temperature score (-2 to 2 z-score scale).
+          60% chunk metrics, 40% daily metrics weighting.
+          Higher values indicate more favorable temperatures for insect activity.
+      - name: tmin_score
+        description: >
+          Minimum temperature score (-2 to 2 z-score scale).
+          60% chunk metrics, 40% daily metrics weighting.
+      - name: tmax_score
+        description: >
+          Maximum temperature score (-2 to 2 z-score scale).
+          60% chunk metrics, 40% daily metrics weighting.
+      - name: precip_score
+        description: >
+          Precipitation score (-2 to 2 z-score scale).
+          50% chunk metrics, 50% daily metrics weighting.
+      - name: srad_score
+        description: >
+          Solar radiation score (-2 to 2 z-score scale).
+          50% chunk metrics, 50% daily metrics weighting.
+      - name: warm10_score
+        description: >
+          Score for days above 10°C (-2 to 2 z-score scale).
+          50% chunk metrics, 50% daily metrics weighting.
+      - name: warm15_score
+        description: >
+          Score for days above 15°C (-2 to 2 z-score scale).
+          50% chunk metrics, 50% daily metrics weighting.
+      - name: warm20_score
+        description: >
+          Score for days above 20°C (-2 to 2 z-score scale).
+          50% chunk metrics, 50% daily metrics weighting.
+      - name: warm_anomaly_score
+        description: >
+          Temperature anomaly score (-2 to 2 z-score scale).
+          60% chunk metrics, 40% daily metrics weighting.
+          Measures deviation from historical temperature norms.
+      - name: optimal_insect_score
+        description: >
+          Overall insect activity conditions score (-2 to 2 z-score scale).
+          60% chunk metrics, 40% daily metrics weighting.
+          Combines multiple factors to estimate overall favorability for insect activity.

@@ -1,0 +1,21 @@
+bird,location_name,country,type,order_nr,lat,lon,weather_check_start,weather_check_end,migration_direction_arrival,migration_direction_departure
+white_stork,Serengeti National Park,Tanzania,Wintering Ground,1,-2.3333,34.8333,70,35,350,350
+white_stork,Hula Valley,Israel,Stopover Location,2,33.1167,35.6,42,21,350,350
+white_stork,Bosphorus/Istanbul,Turkey,Stopover Location,3,41.0082,28.9784,35,14,310,310
+white_stork,Kraków,Poland,Arrival Location,4,50.0647,19.945,21,0,20,20
+common_swift,Malawi,Malawi,Wintering Ground,1,-13.2543,34.3015,63,28,0,0
+common_swift,Gulf of Gabès,Tunisia,Stopover Location,2,34,10.3,42,21,0,45
+common_swift,Po Valley,Italy,Stopover Location,3,45.0703,9.6873,35,14,45,45
+common_swift,Tarnów,Poland,Arrival Location,4,50.0121,20.9858,21,0,30,30
+barn_swallow,Kruger National Park,South Africa,Wintering Ground,1,-23.9884,31.5547,56,28,0,0
+barn_swallow,Coto Doñana,Spain,Stopover Location,2,37,-6.4333,35,14,345,55
+barn_swallow,Neusiedler See,Austria,Stopover Location,3,47.85,16.85,28,7,30,30
+barn_swallow,Nowy Sącz,Poland,Arrival Location,4,49.6249,20.6913,21,0,25,25
+common_cuckoo,Katavi National Park,Tanzania,Wintering Ground,1,-6.8333,31.25,63,28,0,0
+common_cuckoo,Nile Delta,Egypt,Stopover Location,2,30.8,31,42,21,0,330
+common_cuckoo,Lake Prespa,North Macedonia,Stopover Location,3,40.9,21.0333,35,14,340,15
+common_cuckoo,Ojców National Park,Poland,Arrival Location,4,50.2167,19.8333,21,0,15,15
+western_yellow_wagtail,Senegal Delta,Senegal,Wintering Ground,1,16.3,-16.2667,56,25,55,55
+western_yellow_wagtail,Lake Ichkeul,Tunisia,Stopover Location,2,37.1833,9.6667,35,15,55,25
+western_yellow_wagtail,Po Delta,Italy,Stopover Location,3,44.9667,12.2167,30,10,25,25
+western_yellow_wagtail,Babia Góra National Park,Poland,Arrival Location,4,49.5833,19.5333,21,0,20,20

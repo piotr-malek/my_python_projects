@@ -1,0 +1,252 @@
+{
+  "white_stork": {
+    "locations": [
+      {
+        "location_name": "Serengeti National Park",
+        "country": "Tanzania",
+        "type": "Wintering Ground",
+        "lat": -2.3333,
+        "lon": 34.8333,
+        "weather_check_start": 70,
+        "weather_check_end": 35,
+        "migration_direction": 350
+      },
+      {
+        "location_name": "Hula Valley",
+        "country": "Israel",
+        "type": "Stopover Location",
+        "lat": 33.1167,
+        "lon": 35.6,
+        "weather_check_start": 42,
+        "weather_check_end": 21,
+        "migration_direction": {
+          "arrival": 350,
+          "departure": 350
+        }
+      },
+      {
+        "location_name": "Bosphorus/Istanbul",
+        "country": "Turkey",
+        "type": "Stopover Location",
+        "lat": 41.0082,
+        "lon": 28.9784,
+        "weather_check_start": 35,
+        "weather_check_end": 14,
+        "migration_direction": {
+          "arrival": 310,
+          "departure": 310
+        }
+      },
+      {
+        "location_name": "Kraków",
+        "country": "Poland",
+        "type": "Arrival Location",
+        "lat": 50.0647,
+        "lon": 19.945,
+        "weather_check_start": 21,
+        "weather_check_end": 0,
+        "migration_direction": 20
+      }
+    ]
+  },
+  "common_swift": {
+    "locations": [
+      {
+        "location_name": "Malawi",
+        "country": "Malawi",
+        "type": "Wintering Ground",
+        "lat": -13.2543,
+        "lon": 34.3015,
+        "weather_check_start": 63,
+        "weather_check_end": 28,
+        "migration_direction": 0
+      },
+      {
+        "location_name": "Gulf of Gabès",
+        "country": "Tunisia",
+        "type": "Stopover Location",
+        "lat": 34.0,
+        "lon": 10.3,
+        "weather_check_start": 42,
+        "weather_check_end": 21,
+        "migration_direction": {
+          "arrival": 0,
+          "departure": 45
+        }
+      },
+      {
+        "location_name": "Po Valley",
+        "country": "Italy",
+        "type": "Stopover Location",
+        "lat": 45.0703,
+        "lon": 9.6873,
+        "weather_check_start": 35,
+        "weather_check_end": 14,
+        "migration_direction": {
+          "arrival": 45,
+          "departure": 45
+        }
+      },
+      {
+        "location_name": "Tarnów",
+        "country": "Poland",
+        "type": "Arrival Location",
+        "lat": 50.0121,
+        "lon": 20.9858,
+        "weather_check_start": 21,
+        "weather_check_end": 0,
+        "migration_direction": 30
+      }
+    ]
+  },
+  "barn_swallow": {
+    "locations": [
+      {
+        "location_name": "Kruger National Park",
+        "country": "South Africa",
+        "type": "Wintering Ground",
+        "lat": -23.9884,
+        "lon": 31.5547,
+        "weather_check_start": 56,
+        "weather_check_end": 28,
+        "migration_direction": 0
+      },
+      {
+        "location_name": "Coto Doñana",
+        "country": "Spain",
+        "type": "Stopover Location",
+        "lat": 37.0,
+        "lon": -6.4333,
+        "weather_check_start": 35,
+        "weather_check_end": 14,
+        "migration_direction": {
+          "arrival": 345,
+          "departure": 55
+        }
+      },
+      {
+        "location_name": "Neusiedler See",
+        "country": "Austria",
+        "type": "Stopover Location",
+        "lat": 47.85,
+        "lon": 16.85,
+        "weather_check_start": 28,
+        "weather_check_end": 7,
+        "migration_direction": {
+          "arrival": 30,
+          "departure": 30
+        }
+      },
+      {
+        "location_name": "Nowy Sącz",
+        "country": "Poland",
+        "type": "Arrival Location",
+        "lat": 49.6249,
+        "lon": 20.6913,
+        "weather_check_start": 21,
+        "weather_check_end": 0,
+        "migration_direction": 25
+      }
+    ]
+  },
+  "common_cuckoo": {
+    "locations": [
+      {
+        "location_name": "Katavi National Park",
+        "country": "Tanzania",
+        "type": "Wintering Ground",
+        "lat": -6.8333,
+        "lon": 31.25,
+        "weather_check_start": 63,
+        "weather_check_end": 28,
+        "migration_direction": 0
+      },
+      {
+        "location_name": "Nile Delta",
+        "country": "Egypt",
+        "type": "Stopover Location",
+        "lat": 30.8,
+        "lon": 31.0,
+        "weather_check_start": 42,
+        "weather_check_end": 21,
+        "migration_direction": {
+          "arrival": 0,
+          "departure": 330
+        }
+      },
+      {
+        "location_name": "Lake Prespa",
+        "country": "North Macedonia",
+        "type": "Stopover Location",
+        "lat": 40.9,
+        "lon": 21.0333,
+        "weather_check_start": 35,
+        "weather_check_end": 14,
+        "migration_direction": {
+          "arrival": 340,
+          "departure": 15
+        }
+      },
+      {
+        "location_name": "Ojców National Park",
+        "country": "Poland",
+        "type": "Arrival Location",
+        "lat": 50.2167,
+        "lon": 19.8333,
+        "weather_check_start": 21,
+        "weather_check_end": 0,
+        "migration_direction": 15
+      }
+    ]
+  },
+  "western_yellow_wagtail": {
+    "locations": [
+      {
+        "location_name": "Senegal Delta",
+        "country": "Senegal",
+        "type": "Wintering Ground",
+        "lat": 16.3,
+        "lon": -16.2667,
+        "weather_check_start": 56,
+        "weather_check_end": 25,
+        "migration_direction": 55
+      },
+      {
+        "location_name": "Lake Ichkeul",
+        "country": "Tunisia",
+        "type": "Stopover Location",
+        "lat": 37.1833,
+        "lon": 9.6667,
+        "weather_check_start": 35,
+        "weather_check_end": 15,
+        "migration_direction": {
+          "arrival": 55,
+          "departure": 25
+        }
+      },
+      {
+        "location_name": "Po Delta",
+        "country": "Italy",
+        "type": "Stopover Location",
+        "lat": 44.9667,
+        "lon": 12.2167,
+        "weather_check_start": 30,
+        "weather_check_end": 10,
+        "migration_direction": {
+          "arrival": 25,
+          "departure": 25
+        }
+      },
+      {
+        "location_name": "Babia Góra National Park",
+        "country": "Poland",
+        "type": "Arrival Location",
+        "lat": 49.5833,
+        "lon": 19.5333,
+        "weather_check_start": 21,
+        "weather_check_end": 0,
+        "migration_direction": 20
+      }
+    ]
+  }
+}

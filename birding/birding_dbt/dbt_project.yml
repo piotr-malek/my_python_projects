@@ -1,0 +1,51 @@
+name: 'birding'
+version: '1.0.0'
+config-version: 2
+profile: 'birding_dbt'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+models:
+  birding:
+    +materialized: view
+    staging:
+      +schema: staging
+      +materialized: view
+    core:
+      +schema: core
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table
+
+seeds:
+  birding:
+    +enabled: true
+    +quote_columns: true
+    +schema: seeds
+    migration_locations:
+      +column_types:
+        lat: float64
+        lon: float64
+        weather_check_start: int64
+        weather_check_end: int64
+        migration_direction_arrival: int64
+        migration_direction_departure: int64
+        bird: string
+    location_weights:
+      +column_types:
+        metric: string
+        class: string
+        wintering: float64
+        stopover_1: float64
+        stopover_2: float64
+        arrival: float64
+
+require-dbt-version: ">=1.9.0"
+
+vars:
+  ebird_api_token: "{{ env_var('EBIRD_API_TOKEN') }}"

@@ -1,0 +1,57 @@
+version: 2
+
+seeds:
+  - name: migration_locations
+    description: "Locations along bird migration routes with weather check parameters"
+    config:
+      column_types:
+        bird: STRING
+        location_name: STRING
+        country: STRING
+        type: STRING
+        lat: FLOAT64
+        lon: FLOAT64
+        weather_check_start: INT64
+        weather_check_end: INT64
+        migration_direction_arrival: INT64
+        migration_direction_departure: INT64
+    columns:
+      - name: bird
+        description: "Bird species common name"
+        tests:
+          - not_null
+      - name: location_name
+        description: "Name of the location"
+        tests:
+          - not_null
+      - name: country
+        description: "Country where the location is situated"
+        tests:
+          - not_null
+      - name: type
+        description: "Type of location (Wintering Ground, Stopover Location, Arrival Location)"
+        tests:
+          - not_null
+      - name: lat
+        description: "Latitude of the location"
+        tests:
+          - not_null
+      - name: lon
+        description: "Longitude of the location"
+        tests:
+          - not_null
+      - name: weather_check_start
+        description: "Number of days before arrival to start checking weather"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_pl_ma_first_sightings')
+              field: bird
+      - name: weather_check_end
+        description: "Number of days before arrival to stop checking weather"
+        tests:
+          - not_null
+      - name: migration_direction
+        description: "Direction of migration in degrees (0-360)"
+        tests:
+          - not_null

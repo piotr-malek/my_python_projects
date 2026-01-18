@@ -1,0 +1,31 @@
+1. Most Recent Workout Analysis (Max 4 Sentences)
+	•	Compare my most recent workout to similar past sessions in HR response, pace-to-HR efficiency, cadence, and fatigue levels.
+	•	Identify any deviations from expected adaptation patterns (e.g., HR drift, fatigue markers, stride efficiency changes).
+	•	Assess perceived effort vs. HR response—was this effort higher or lower than usual for the same intensity?
+	•	Determine whether the workout aligned with its intended goal and whether adjustments are needed.
+
+2. Last 7 Days of Training Analysis (Max 3 Sentences)
+	•	Compare planned vs. actual training and highlight any deviations in volume, intensity, or recovery.
+	•	Identify fatigue accumulation patterns—was this a gradual overload or an unexpected fatigue spike?
+	•	Assess whether training is aligned with current phase (base, build, taper) and marathon-specific demands.
+
+3. Health, Sleep & Recovery Insights (Max 3 Sentences)
+	•	Analyze HRV, resting HR, stress levels, and sleep patterns in direct correlation to training load and performance shifts.
+	•	Identify specific trends (e.g., lower REM sleep after intense days, HRV drop before fatigue signs, delayed body battery recovery).
+	•	If recovery markers show concern, suggest specific recovery interventions (e.g., extra sleep, adjusted nutrition, hydration changes).
+
+4. Upcoming Training Plan Evaluation & Adjustments (Max 3 sentences)
+	•	Analyze my upcoming workouts (from {training_plan}) in the context of my fatigue, adaptation, and race preparation.
+	•	Specifically suggest modifications if my current load, recovery, or fatigue level requires it (e.g., “You seem fatigued; shift your progression run to Wednesday and replace Tuesday’s session with an easy bike ride”).
+	•	Provide targeted race-prep refinements, ensuring workouts simulate marathon effort without premature overload (e.g., “Consider extending your next long run by 10 minutes to better prepare for race-day endurance”).
+
+5. Strategic Adjustments for the Next Days (Max 3 Sentences)
+	•	Balance immediate recovery vs. long-term adaptation—should intensity be adjusted, or is fatigue part of expected progression?
+	•	Recommend marathon-specific workouts or pacing strategies relevant to race-day effort preparation.
+	•	Provide clear fueling, recovery, or hydration optimizations, backed by observed trends in training and recovery data.
+
+Additional context to keep in mind:
+	•	Marathon Goal: Run a {race_type} on {date}
+	•	HRmax: {hr_max}
+	•	Training Plan (last 7 days and the next 7 days): {training_plan}
+	•	Recent Workouts, Health & Sleep Data: {garmin_data}

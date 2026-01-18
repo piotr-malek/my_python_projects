@@ -1,0 +1,69 @@
+version: 2
+
+sources:
+  - name: birding_raw
+    description: "Raw data sources for bird migration tracking"
+    database: birding-460212
+    schema: birding_raw
+    tables:
+      - name: pl_ma_first_sightings
+        description: "First sightings data for bird migration tracking"
+      - name: pl_ma_spring_weather_data
+        description: "Daily weather observations used for arrival metrics"
+        description: "First sightings data for bird migration tracking"
+        columns:
+          - name: common_name
+            description: "Common name of the bird species"
+          - name: year
+            description: "Year of observation"
+          - name: observation_date
+            description: "Date of first sighting observation"
+
+  - name: birding_dbt_seed
+    description: "Seed data for bird migration tracking"
+    database: birding-460212
+    schema: dbt_seed
+    tables:
+      - name: migration_locations
+        description: "Locations along bird migration routes with weather check parameters"
+        columns:
+          - name: bird
+            description: "Bird species common name"
+            tests:
+              - not_null
+          - name: location_name
+            description: "Name of the location"
+            tests:
+              - not_null
+          - name: country
+            description: "Country where the location is situated"
+            tests:
+              - not_null
+          - name: type
+            description: "Type of location (Wintering Ground, Stopover Location, Arrival Location)"
+            tests:
+              - not_null
+          - name: lat
+            description: "Latitude of the location"
+            tests:
+              - not_null
+          - name: lon
+            description: "Longitude of the location"
+            tests:
+              - not_null
+          - name: weather_check_start
+            description: "Number of days before arrival to start checking weather"
+            tests:
+              - not_null
+          - name: weather_check_end
+            description: "Number of days before arrival to stop checking weather"
+            tests:
+              - not_null
+          - name: migration_direction_arrival
+            description: "Migration direction at arrival"
+            tests:
+              - not_null
+          - name: migration_direction_departure
+            description: "Migration direction at departure"
+            tests:
+              - not_null

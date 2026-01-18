@@ -1,0 +1,53 @@
+# Environment variables
+.env
+**/.env
+
+# Service account credentials
+config/
+**/config/bq_service_account.json
+bq_service_account.json
+service_account.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# SQLite cache files
+*.sqlite
+*.sqlite3
+.cache.sqlite
+ebird_cache.sqlite
+**/*_cache.sqlite
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Virtual environment
+venv/
+env/
+ENV/
+**/venv/
+
+# Logs
+logs/
+*.log
+**/*.log
+dbt.log
+**/dbt.log
+
+# dbt
+target/
+dbt_packages/
+profiles.yml
+
+# Cache directories
+cache/
+.cache/
