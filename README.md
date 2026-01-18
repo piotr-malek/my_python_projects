@@ -1,7 +1,7 @@
 Hi, I'm Piotr, I'm an analytics engineer. Here are some of my personal projects:
 
 - [Strava Personal Dashboard](https://github.com/piotr-malek/my_python_projects/blob/main/strava_activities.ipynb)
-  - End-to-end pipeline that extracts personal Strava activities using OAuth, transforms the data, loads it into Google Sheets, and automates updates to a Looker Studio dashboard.
+  - End-to-end pipeline that extracts personal Strava activities using Strava API, transforms the data, loads it into Google Sheets, and automates updates to a Looker Studio dashboard.
   - OAuth, APIs, Google Sheets automation, Looker Studio
 
 - [Bird Migration Analysis](https://github.com/piotr-malek/my_python_projects/tree/main/birding)
