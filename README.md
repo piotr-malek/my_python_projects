@@ -5,7 +5,7 @@ Hi, I'm Piotr, I'm an analytics engineer. Here are some of my personal projects:
   - OAuth, APIs, Google Sheets automation, Looker Studio
 
 - [Bird Migration Analysis](https://github.com/piotr-malek/my_python_projects/tree/main/birding)
-  - End-to-end data pipeline that analyzes bird migration patterns and correlations with weather data. Collects data from eBird and OpenMeteo APIs, transforms it using dbt in BigQuery, and generates analytical models for migration timing analysis.
+  - End-to-end data pipeline that analyzes bird migration patterns and correlations with weather data. Collects data from eBird and OpenMeteo APIs, transforms it using dbt in BigQuery, and aims to find correlations that can help predict future migrations.
   - APIs, dbt, BigQuery, SQL, data modeling
 
 - [Garmin AI Training Coach](https://github.com/piotr-malek/my_python_projects/tree/main/garmin_ai)
