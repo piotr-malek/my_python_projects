@@ -1,21 +1,25 @@
 Hi, I'm Piotr, I'm an analytics engineer. Here are some of my personal projects:
 
+- [Disaster Risk Predictor](https://github.com/piotr-malek/my_python_projects/tree/main/disaster_predictor)
+  - Helps monitor multi-hazard disaster risk (flood, fire, drought, landslide) across 250+ regions around the world. Trained per-hazard ML models score risk from Earth Engine and OpenMeteo-style inputs into BigQuery. Airflow automates the full daily chain with no manual steps: ingestion → ML risk assessment → LLM interpretation of weather outlooks, plus a Streamlit app for users to monitor risks.
+  - Python, ML (trained hazard models), BigQuery, Airflow (ingest → assess → interpret), Earth Engine, Streamlit, LLMs
+
 - [Strava Personal Dashboard](https://github.com/piotr-malek/my_python_projects/blob/main/strava_activities.ipynb)
-  - End-to-end pipeline that extracts personal Strava activities using Strava API, transforms the data, loads it into Google Sheets, and automates updates to a Looker Studio dashboard.
+  - Gives a single, always-updated view of personal training history instead of juggling the Strava app alone. Pulls activities via the Strava API, shapes the data, loads Google Sheets, and feeds a Looker Studio dashboard with automated refresh.
   - OAuth, APIs, Google Sheets automation, Looker Studio
 
 - [Bird Migration Analysis](https://github.com/piotr-malek/my_python_projects/tree/main/birding)
-  - End-to-end data pipeline that analyzes bird migration patterns and correlations with weather data. Collects data from eBird and OpenMeteo APIs, transforms it using dbt in BigQuery, and aims to find correlations that can help predict future migrations.
+  - Explores whether migration timing and routes line up with weather so birding and forecasting questions can be grounded in data. Ingests eBird and OpenMeteo, models and transforms in BigQuery with dbt, and surfaces patterns relevant to predicting migration windows.
   - APIs, dbt, BigQuery, SQL, data modeling
 
 - [Garmin AI Training Coach](https://github.com/piotr-malek/my_python_projects/tree/main/garmin_ai)
-  - Personal training coach that integrates Garmin fitness data with Gemini AI to provide personalized workout analysis, recovery insights, and training plan adjustments based on activity history, sleep, and health metrics.
+  - Turns disconnected Garmin metrics into coaching-style guidance: what workouts meant for fitness, how recovery looks, and how to tweak plans. Uses the Garmin API plus Gemini over activity, sleep, and health history, with optional Google Sheets as a scratchpad.
   - APIs, LLMs (Gemini), Google Sheets
 
 - [Trello Card Automation](https://github.com/piotr-malek/my_python_projects/tree/main/trello_fetching_cards)
-  - Script that fetches Trello cards with robust error handling and testing.
+  - Reliable batch retrieval of Trello cards for reporting or downstream automation, with explicit error handling and tests so flaky networks do not silently drop work.
   - APIs, error handling, unit testing
 
 - [Urban Heat Island (Singapore)](https://github.com/piotr-malek/my_python_projects/blob/main/uhi_singapore.ipynb)
-  - Collects environmental and climate data from multiple APIs, performs exploratory analysis, and visualizes heat patterns in Singapore.
+  - Surfaces where and how urban areas run hotter than their surroundings using API-sourced environmental inputs, then explores and charts Singapore-specific heat patterns for insight rather than a single headline number.
   - APIs, data wrangling, visualization
