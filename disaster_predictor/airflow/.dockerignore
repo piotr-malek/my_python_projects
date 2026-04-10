@@ -1,0 +1,12 @@
+astro
+.git
+.env
+airflow_settings.yaml
+logs/
+.venv
+airflow.db
+airflow.cfg
+
+# Allow include but exclude pycache
+!include/
+include/**/__pycache__/

@@ -1,0 +1,101 @@
+{
+  "purpose": "This JSON spec is used to add new regions: verify with Google Earth Engine (GEE) → create subregions → optionally append to BigQuery. Geometries come from FAO GAUL 2015 level2 (admin2 union) when components are given, else from the bbox rectangle.",
+  "top_level": {
+    "regions": {
+      "required": true,
+      "type": "array",
+      "description": "List of region objects. Each defines one region to add."
+    },
+    "gaul_overrides": {
+      "required": false,
+      "type": "object",
+      "description": "Optional. Maps region name to a map of component-name → GAUL NAME_2 string. Use when your component names do not exactly match FAO GAUL admin2 NAME_2 (e.g. accents, spelling). Keys are region names; values are objects like {\"YourComponent\": \"Exact GAUL NAME_2\"}."
+    }
+  },
+  "per_region_fields": {
+    "region": {
+      "required": true,
+      "type": "string",
+      "description": "Unique name for the region. Used as key and as parent_region for subregions. No spaces in IDs (use underscores)."
+    },
+    "bbox": {
+      "required": true,
+      "type": "array",
+      "items": "number",
+      "length": 4,
+      "order": ["lon_min", "lat_min", "lon_max", "lat_max"],
+      "description": "Bounding box [lon_min, lat_min, lon_max, lat_max]. Always used: either as the geometry (when no GAUL components) or to filter GAUL features and as fallback."
+    },
+    "country": {
+      "required": false,
+      "type": "string",
+      "description": "Required only when using GAUL via 'components'. Must match FAO GAUL ADM0_NAME for the country (e.g. 'Peru', 'Bolivia'). Used to filter GAUL level2 features. For bbox-only regions, can be omitted or kept for documentation."
+    },
+    "components": {
+      "required": false,
+      "type": "array",
+      "items": "string",
+      "description": "List of admin2 (level2) names to union from FAO GAUL 2015. If present (and country is set), geometry = union of matched GAUL polygons; matching is by NAME_2 (normalized: lowercased, accents stripped, underscores as spaces). If omitted or empty, geometry = bbox rectangle."
+    },
+    "area_km2": {
+      "required": false,
+      "type": "number",
+      "description": "Expected area in km². Used only for verification: if actual GEE area differs from this by more than 25%, a warning is reported. Optional."
+    },
+    "gee_notes": {
+      "required": false,
+      "type": "string",
+      "description": "Free text printed in the verification report. No effect on logic. Optional."
+    },
+    "gaul_overrides": {
+      "required": false,
+      "type": "object",
+      "description": "Optional per-region overrides. Same shape as top-level gaul_overrides but scoped to this region: {\"component\": \"GAUL NAME_2\"}. Overrides top-level for this region."
+    }
+  },
+  "geometry_logic": {
+    "when_gaul_used": "If 'components' is non-empty AND 'country' is set: load FAO/GAUL/2015/level2, filter by bbox and ADM0_NAME == country, match NAME_2 to each component (with optional gaul_overrides). Geometry = union of matched polygons. If any component has no match, fallback to bbox.",
+    "when_bbox_used": "If 'components' is omitted, empty, or matching fails: geometry = rectangle from bbox [lon_min, lat_min, lon_max, lat_max].",
+    "normalization_for_matching": "Component names and GAUL NAME_2 are normalized: strip, lowercased, accents removed (NFD + strip Mn), underscores replaced with spaces. gaul_overrides map your key to the exact GAUL string you want to match."
+  },
+  "example_full_file": {
+    "regions": [
+      {
+        "region": "Example_Region_A",
+        "country": "Peru",
+        "components": ["Lima", "Callao"],
+        "bbox": [-77.2, -12.2, -76.7, -11.8],
+        "area_km2": 15000,
+        "gee_notes": "Union of admin2 units (GAUL); bbox used as fallback or to filter GAUL"
+      },
+      {
+        "region": "Example_Region_B",
+        "country": "Bolivia",
+        "bbox": [-68.5, -17.5, -67.5, -16.5],
+        "area_km2": 8000,
+        "gee_notes": "Bbox-only (no components); country kept for clarity, unused for geometry"
+      }
+    ],
+    "gaul_overrides": {}
+  },
+  "example_gaul_overrides": {
+    "description": "Use when a component name does not match GAUL NAME_2. Keys in overrides are your component names; values are the exact GAUL NAME_2 strings.",
+    "gaul_overrides": {
+      "My_Region_Name": {
+        "My District": "Actual GAUL NAME_2 Here"
+      }
+    }
+  },
+  "minimal_valid_examples": {
+    "bbox_only_region": {
+      "region": "Simple_Region",
+      "bbox": [-70.0, -15.0, -69.0, -14.0]
+    },
+    "gaul_region": {
+      "region": "Admin2_Union",
+      "country": "Peru",
+      "components": ["Lima", "Callao"],
+      "bbox": [-77.2, -12.2, -76.7, -11.8]
+    }
+  }
+}

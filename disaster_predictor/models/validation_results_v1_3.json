@@ -1,0 +1,52 @@
+{
+  "version": "1.3",
+  "generated_at_iso": "2026-04-06",
+  "validation_log": "models/validation_v1_3.log",
+  "split_protocol": "Chronological test tail (20%): first half for threshold calibration, second half for reported metrics.",
+  "by_hazard": {
+    "fire": {
+      "weighted_f1": 0.8361,
+      "roc_auc": 0.8949,
+      "f1_level_0": 0.9113,
+      "f1_level_1": 0.1458,
+      "f1_level_2": 0.7537,
+      "f1_level_3": 1.0,
+      "class_thresholds": {"level_2": 0.4, "level_3": 0.2},
+      "threshold_calibration_metric": "hardcoded_v1_3_fire"
+    },
+    "drought": {
+      "weighted_f1": 0.866,
+      "roc_auc": 0.8566,
+      "f1_level_0": 0.9065,
+      "f1_level_1": 0.5895,
+      "f1_level_2": 0.5988,
+      "f1_level_3": 0.6272,
+      "class_thresholds": {"level_2": 0.4, "level_3": 0.4},
+      "threshold_calibration_metric": "hardcoded_v1_3_drought"
+    },
+    "flood": {
+      "weighted_f1": 0.843,
+      "roc_auc": 0.6612,
+      "f1_level_0": 0.9155,
+      "f1_level_1": 0.034,
+      "f1_level_2": 0.1598,
+      "f1_level_3": 0.2953,
+      "class_thresholds": {"level_2": 0.2, "level_3": 0.5},
+      "threshold_calibration_metric": "5_f1_l3_plus_2_f1_l2_minus_fpr_l0",
+      "grid_search_score": 1.6895
+    },
+    "landslide": {
+      "weighted_f1": 0.9654,
+      "roc_auc": 0.5692,
+      "f1_level_0": 0.9857,
+      "f1_level_1": 0.1021,
+      "f1_level_2": 0.1692,
+      "f1_level_3": 0.0,
+      "n_classes_trained": 3,
+      "class_thresholds": {"level_2": 0.25, "level_3": 0.7},
+      "threshold_calibration_metric": "5_f1_l2_minus_fpr_l0_level3_ui_fixed_0_70",
+      "grid_search_score": 0.6993,
+      "note_level_3_f1": "Labels are 0–2 only; predicted level 3 is UI promotion from P(class 2). No level-3 predictions on this final test slice, so sklearn F1 for level 3 is 0."
+    }
+  }
+}

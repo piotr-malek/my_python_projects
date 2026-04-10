@@ -1,0 +1,48 @@
+{
+  "model_version": "1.2",
+  "validation_log": "models/validation_v1_2.log",
+  "train_log": "models/train_v1_2.log",
+  "notes": [
+    "Metrics are on the second half of the chronological 20% test tail (final holdout); thresholds were fit on the first half of that tail.",
+    "Landslide is a 3-class RF (0/1/2); UI level 3 is emitted when P(severe) >= level_3 threshold (0.85). Final-test confusion matrix may show no column-3 predictions if nothing crosses 0.85 on this slice."
+  ],
+  "metrics": {
+    "fire": {
+      "weighted_f1": 0.802,
+      "roc_auc": 0.8822,
+      "f1_level_0": 0.8875,
+      "f1_level_1": 0.0015,
+      "f1_level_2": 0.7067,
+      "f1_level_3": 1.0,
+      "class_thresholds": {"level_2": 0.25, "level_3": 0.2}
+    },
+    "drought": {
+      "weighted_f1": 0.8746,
+      "roc_auc": 0.8426,
+      "f1_level_0": 0.9157,
+      "f1_level_1": 0.5691,
+      "f1_level_2": 0.602,
+      "f1_level_3": 0.6439,
+      "class_thresholds": {"level_2": 0.5, "level_3": 0.5}
+    },
+    "flood": {
+      "weighted_f1": 0.8486,
+      "roc_auc": 0.6957,
+      "f1_level_0": 0.9143,
+      "f1_level_1": 0.1961,
+      "f1_level_2": 0.1284,
+      "f1_level_3": 0.3434,
+      "class_thresholds": {"level_2": 0.35, "level_3": 0.25}
+    },
+    "landslide": {
+      "weighted_f1": 0.9695,
+      "roc_auc": 0.5661,
+      "f1_level_0": 0.9884,
+      "f1_level_1": 0.187,
+      "f1_level_2": 0.1699,
+      "f1_level_3": 0.0,
+      "class_thresholds": {"level_2": 0.45, "level_3": 0.85},
+      "n_classes_trained": 3
+    }
+  }
+}

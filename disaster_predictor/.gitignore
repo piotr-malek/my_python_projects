@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+.envrc
+config/service_account.json
+**/service_account.json
+*.pem
+*.key
+.DS_Store
+.cache.sqlite
+.vscode/
+.idea/
+.cursor/
+__pycache__/
+*.pyc
+
+# Trained model binaries (GitHub limit 100MB; store in object storage or Git LFS)
+models/*.pkl

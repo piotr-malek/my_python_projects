@@ -1,0 +1,16 @@
+# Merged by `astro dev start` (see https://www.astronomer.io/docs/astro/cli/run-airflow-locally).
+# Lets containers resolve host.docker.internal → your Mac/Linux host (Ollama on :11434).
+# Linux Docker Engine: requires host-gateway; Docker Desktop macOS/Windows: usually works without this too.
+services:
+  scheduler:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  dag-processor:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  api-server:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  triggerer:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

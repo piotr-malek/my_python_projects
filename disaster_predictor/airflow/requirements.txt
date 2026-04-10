@@ -1,0 +1,20 @@
+# Astro Runtime includes the following pre-installed providers packages: https://www.astronomer.io/docs/astro/runtime-image-architecture#provider-packages
+
+# Project dependencies
+pandas-gbq
+pyarrow
+google-auth
+google-cloud-bigquery
+google-cloud-bigquery-storage
+google-cloud-storage
+ollama
+earthengine-api
+python-dotenv
+urllib3<2
+openmeteo-requests
+timezonefinder
+requests-cache
+scipy
+joblib
+scikit-learn
+imbalanced-learn

@@ -1,0 +1,13 @@
+{
+  "soil_texture_class": [
+    "clay_loam",
+    "loam",
+    "loamy_sand",
+    "sandy_clay_loam",
+    "sandy_loam",
+    "silt",
+    "silt_loam",
+    "silty_clay",
+    "silty_clay_loam"
+  ]
+}
