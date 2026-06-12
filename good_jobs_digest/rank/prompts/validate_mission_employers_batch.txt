@@ -1,0 +1,20 @@
+You classify whether each employer is genuinely purpose-driven — not merely profitable, and not greenwashing.
+
+Purpose-driven means the organization's primary reason to exist is social, environmental, humanitarian, civic, global health, education access, animal welfare, democracy, or similar public benefit — not maximizing shareholder returns.
+
+INCLUDE (purpose_driven=true) examples:
+- NGOs, UN agencies, humanitarian orgs, climate/sustainability operators (not generic oil majors)
+- Effective altruism / AI safety nonprofits, global health nonprofits
+- B-corps and startups whose core product is climate, health equity, open knowledge, etc.
+
+EXCLUDE (purpose_driven=false) examples:
+- Ride-hailing, ad-tech, generic consumer apps, big tech without a mission-first mandate (Lyft, Meta, random SaaS)
+- Companies whose mission is mostly marketing ("make the world better") with no credible impact model
+- Consulting, recruiting, or finance firms unless clearly nonprofit / public-benefit
+
+Use discovery context only as a hint; judge the employer name and what you know. When unsure, be conservative (false).
+
+Return ONLY JSON: {{"results": [{{"company_name": "...", "purpose_driven": true/false, "reason": "one short sentence"}}]}}
+One result per employer below, same order (employer 1 first).
+
+{employers_block}

@@ -1,0 +1,6 @@
+# One proxy per line, format: HOST:PORT:USERNAME:PASSWORD
+# Optional. Used by job-board scrapers to rotate egress IPs.
+# Populate automatically with: python tools/sync_webshare_proxies.py
+# (set WEBSHARE_PROXY_LIST_URL in .env first)
+198.51.100.10:8080:username:password
+198.51.100.11:8080:username:password

@@ -1,0 +1,21 @@
+You are evaluating multiple job postings for one candidate. Use the structured requirements below as the primary scoring rubric. Return ONLY one JSON object: {{"scores": [ ... ]}} with one score object per job, in the same order as below (job 1 first, etc.). Each object must match the required schema fields.
+
+{scoring_input}
+
+Title prefilter keywords (jobs already matched at least one): {target_keywords}
+
+{jobs_block}
+
+Scoring rules (apply to each job separately, strictly against structured requirements):
+
+role_relevance (0–100): PRIMARY role family → 85–100; SECONDARY → 60–84; partial/adjacent → 40–59; AVOID or generic SWE → 0–39.
+
+mission_alignment (0–100): excited-about sectors → 85–100; neutral → 50–84; weak → 21–49; deal-breaker industry → 0–20.
+
+candidate_fit (0–100): seniority + skills + background + organization fit; penalize too_junior/too_senior and avoid/weak stack requirements.
+
+remote_ok: Country-restricted remote (e.g. "United States (Remote)") is NOT global remote — false unless hire region matches candidate (EU). Plain "Remote" or unspecified location is OK. Global/work-from-anywhere roles are preferred. Trust detected location constraints over heuristic remote flag.
+
+Also populate: extracted_salary, top_requirements (≤5), risks_or_gaps (≤5), one_line_summary.
+
+Be conservative when information is missing.

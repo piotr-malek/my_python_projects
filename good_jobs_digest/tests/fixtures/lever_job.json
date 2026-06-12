@@ -1,0 +1,9 @@
+{
+  "id": "abc-123",
+  "text": "Machine Learning Engineer",
+  "hostedUrl": "https://jobs.lever.co/demo/abc",
+  "createdAt": 1715769600000,
+  "workplaceType": "remote",
+  "descriptionPlain": "Build ML systems with Python.",
+  "categories": { "team": "Data", "location": "Remote" }
+}

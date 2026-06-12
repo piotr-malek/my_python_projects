@@ -1,0 +1,24 @@
+# Secrets and credentials
+.env
+config/service_account.json
+config/webshare_proxies.txt
+
+# Personal scoring inputs (ship the .example versions instead)
+profile/profile.md
+profile/preferences.yaml
+
+# Runtime data: SQLite state, fallback digests, scraped registries, logs
+data/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+*.log

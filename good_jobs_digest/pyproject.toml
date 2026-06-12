@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "good-jobs-digest"
+version = "1.0.0"
+description = "Mission-aligned job aggregator: curated ATS + job boards → SQLite/BigQuery → Ollama scoring → daily email digest"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "httpx==0.28.1",
+    "tenacity==9.1.4",
+    "google-cloud-bigquery==3.41.0",
+    "python-dotenv==1.2.2",
+    "pydantic==2.13.4",
+    "ollama==0.6.2",
+    "jinja2==3.1.6",
+    "beautifulsoup4==4.15.0",
+    "html2text==2025.4.15",
+    "pyyaml==6.0.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.0.3"]
+
+[project.scripts]
+good-jobs-digest = "main:main"
+
+[tool.setuptools]
+py-modules = ["main", "config"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "core*",
+    "digest*",
+    "discovery*",
+    "mail*",
+    "normalize*",
+    "pipelines*",
+    "profile*",
+    "rank*",
+    "storage*",
+    "tools*",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

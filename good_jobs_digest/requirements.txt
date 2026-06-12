@@ -1,0 +1,10 @@
+httpx==0.28.1
+tenacity==9.1.4
+google-cloud-bigquery==3.41.0
+python-dotenv==1.2.2
+pydantic==2.13.4
+ollama==0.6.2
+jinja2==3.1.6
+beautifulsoup4==4.15.0
+html2text==2025.4.15
+pyyaml==6.0.3

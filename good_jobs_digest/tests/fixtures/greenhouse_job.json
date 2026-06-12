@@ -1,0 +1,10 @@
+{
+  "id": 999001,
+  "title": "Senior Analytics Engineer",
+  "absolute_url": "https://example.com/jobs/1",
+  "updated_at": "2026-05-01T12:00:00Z",
+  "content": "<p>We need an <strong>analytics engineer</strong> for SQL and dbt.</p>",
+  "location": { "name": "Remote" },
+  "departments": [],
+  "offices": []
+}

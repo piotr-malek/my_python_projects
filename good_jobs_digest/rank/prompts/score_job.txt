@@ -1,0 +1,56 @@
+You are evaluating a job posting for a specific candidate. Use the structured requirements below as the primary scoring rubric. Respond with ONLY one JSON object matching the required schema (no markdown fences).
+
+{scoring_input}
+
+Job context:
+- Company: {company_name}
+- Mission category (employer tag): {mission_category}
+- Title: {title}
+- Location / workplace notes: {location_text}
+- Heuristic remote flag (may be wrong): {is_remote}
+- Detected location constraints (automated — trust over generic "remote" flags):
+{location_analysis}
+- Salary hint if any: {salary_text}
+- Title prefilter keywords (already matched at least one): {target_keywords}
+
+Job description (truncated):
+---
+{description}
+---
+
+Scoring rules (apply strictly against structured requirements above):
+
+role_relevance (0–100):
+- 85–100: Title and description clearly match a PRIMARY role family; hands-on data/analytics/ML/AI engineering work is central.
+- 60–84: Good match to a SECONDARY role family, or primary family with mixed responsibilities.
+- 40–59: Partial overlap (e.g. adjacent role, heavy management, or platform ops with little analytics/ML).
+- 0–39: Matches AVOID list, generic SWE/IT, or little connection to stated role families despite title keyword.
+
+mission_alignment (0–100):
+- 85–100: Strong fit with "excited about" sectors or clear social/climate/humanitarian impact in description.
+- 50–84: Neutral sector or mission mentioned but not central.
+- 21–49: Weak mission fit; commercial B2B with no stated impact.
+- 0–20: Any listed mission deal-breaker, or industry explicitly opposed in requirements.
+
+candidate_fit (0–100):
+- Weight: seniority match (target/acceptable vs too_junior/too_senior), core skills vs job requirements, years/trajectory vs background summary, organization preferences.
+- 85–100: Strong seniority + stack match; requirements align with core strengths.
+- 60–84: Reasonable fit with some gaps noted in risks_or_gaps.
+- 40–59: Significant seniority or skills mismatch.
+- 0–39: Clearly wrong level, wrong stack, or conflicts with organization/deal-breaker preferences.
+
+remote_ok (boolean):
+- "Remote" in a country-specific form (e.g. "United States (Remote)", "Remote - US only") means the hire must be BASED in that country — NOT eligible for an EU-based candidate unless explicitly stated otherwise.
+- Plain "Remote" or no location stated: acceptable per candidate preferences (unspecified location OK).
+- Work-from-anywhere / global / worldwide remote: strongly preferred — remote_ok=true when work arrangement rules are satisfied.
+- Trust "Detected location constraints" above over the heuristic remote flag.
+- true if work arrangement rules are satisfied AND (hire region is EU, location is unspecified, OR posting is globally remote).
+- false if stated region is US/UK-only (non-EU), US work authorization is required, relocation required, US-only hours, or automated check flags incompatibility.
+
+Other fields:
+- extracted_salary: short string if comp stated, else null. Compare to minimum in requirements when scoring risks.
+- top_requirements: up to 5 short strings from the posting.
+- risks_or_gaps: up to 5 short strings (seniority, visa, hybrid, comp below minimum, stack gaps, deal-breakers).
+- one_line_summary: single punchy line for the digest.
+
+Be conservative: missing information → lower scores and explain in risks_or_gaps.

@@ -1,0 +1,21 @@
+You score how genuinely purpose-driven each employer is — not merely profitable, and not greenwashing.
+
+Purpose-driven means the organization's primary reason to exist is social, environmental, humanitarian, civic, global health, education access, animal welfare, democracy, or similar public benefit — not maximizing shareholder returns.
+
+Scoring rubric (mission_score 0-100):
+- 85-100: Core mission is clear public benefit (NGO, UN agency, EA nonprofit, climate/health operator whose product IS the impact)
+- 70-84: Strong mission-first company (certified B Corp with credible impact model, mission-native startup)
+- 50-69: Plausible mission angle — social/environmental benefit is real but not the only driver; worth including in a mission job registry
+- 30-49: Mostly commercial; mission language is marketing garnish
+- 0-29: Pure for-profit with no meaningful purpose beyond making money (ride-hailing, ad-tech, generic SaaS, big tech without mission mandate)
+
+purpose_driven=true when mission_score >= 70.
+
+Borderline rule: when unsure, lean toward inclusion if the discovery source is mission-oriented (bcorp, climatebase, 80000hours, escapethecity, seeds) — score 50+ rather than rejecting a plausible mission employer. Only score below 50 when the employer is clearly commercial with no credible impact model.
+
+mission_type: short label (e.g. "climate", "global_health", "nonprofit", "bcorp", "commercial", "unknown").
+
+Return ONLY JSON: {{"results": [{{"company_name": "...", "mission_score": 0-100, "purpose_driven": true/false, "reason": "one short sentence", "mission_type": "..."}}]}}
+One result per employer below, same order (employer 1 first).
+
+{employers_block}

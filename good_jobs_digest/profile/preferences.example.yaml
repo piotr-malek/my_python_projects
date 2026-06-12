@@ -1,0 +1,87 @@
+# Candidate preferences for job scoring
+# Fill in each section below. The LLM reads the rendered output — be concrete.
+# Run: python -m profile.preferences  (prints what the scorer will see)
+
+version: 1
+
+# ── Q1: Role focus ───────────────────────────────────────────────────────────
+# Options: analytics_engineer | ai_ml_engineer | data_engineer | data_integration_etl
+role_focus:
+  primary:
+    - analytics_engineer
+    - etl_engineer
+    - ai_engineer
+    - artificial_intelligence_engineer
+  secondary:
+    - data_engineer
+    - data_integration_engineer
+  avoid:
+    - pure_devops_or_sre
+    - software_engineer
+    - full_stack_engineer
+    - full_stack_developer
+
+role_shape: null
+
+# ── Q2: Seniority ────────────────────────────────────────────────────────────
+# Levels: intern | graduate | junior | mid | senior | staff | principal | lead | manager | director
+seniority:
+  target: medium
+  acceptable: [junior]
+  too_junior: [intern, graduate]
+  too_senior: [director, vp, head_of, c_level, lead, senior, staff]
+
+# ── Q3: Skills & stack ───────────────────────────────────────────────────────
+skills:
+  core_strengths: [gcp, bigquery, python, sql, terraform, etl, automation, data pipelines, data modeling]
+  want_to_use: [airflow, dbt, llm]
+  avoid_or_weak: [reporting, financial analysis, financial reporting]
+  years_experience: "2-3"
+  languages: [English, Polish]
+
+# ── Q4: Work arrangement ─────────────────────────────────────────────────────
+work_arrangement:
+  remote: required  # required | preferred | flexible
+  hybrid_max_days_per_week: 0
+  relocation: no
+  travel_max_percent: 10
+
+# ── Q5: Location & timezone ──────────────────────────────────────────────────
+location:
+  based_in: EU
+  timezone: CET
+  required_overlap: "European business hours (roughly 09:00–17:00 CET/CEST) or flexible hours"
+  unacceptable: [US-only business hours]
+  acceptable_hire_regions: [EU]
+  # OK when posting does not state a hire country/region (e.g. plain "Remote")
+  allow_unspecified_location: true
+  # Boost roles that explicitly allow work from anywhere / global remote
+  prefer_global_remote: true
+
+# ── Q6: Compensation ─────────────────────────────────────────────────────────
+compensation:
+  currency: any
+  minimum_annual_gross: null
+  contract_types: [permanent]
+  notes: ""
+
+# ── Q7: Mission & industry ───────────────────────────────────────────────────
+mission:
+  excited_about: [human rights, social justice, environmental sustainability, humanitarian, civic tech, wildlife conservation, global health, education]
+  neutral: []
+  deal_breakers: [pure for-profit companies without a clear social purpose]
+
+# ── Q8: Organization & team ──────────────────────────────────────────────────
+organization:
+  preferred: []
+  acceptable: []
+  avoid: []
+
+# ── Q9: Hard deal-breakers ───────────────────────────────────────────────────
+deal_breakers:
+  - "No visa sponsorship needed"
+  - "On-site work"
+  - "Requires relocation"
+
+digest:
+  remote_only: true
