@@ -43,6 +43,16 @@ WELLNESS_FIELDS = (
 MAGNITUDE_LEVELS = ("noise", "mild", "significant", "strong")
 ELEVATED_MAGNITUDES = frozenset({"mild", "significant", "strong"})
 RISK_PATTERN_IDS = frozenset({"pre_illness_signal", "overreaching", "burnout_accumulation"})
+TRAINING_EXPLAINABLE_FIELDS = frozenset(
+    {
+        "rhr_bpm",
+        "hrv_proxy_nocturnal",
+        "hrv_rmssd_ms",
+        "body_battery_high",
+        "body_battery_low",
+        "bb_recharge_efficiency",
+    }
+)
 
 # Metrics that accumulate or aggregate across the whole calendar day. They
 # cannot be compared to full-day baselines until the day is complete. The
@@ -340,12 +350,58 @@ def compute_flags(
     return flags
 
 
-def detect_patterns(flags, load_metrics, hrv_status, hrv_source=None, wellness_window=None, ctl_floor=30):
+def payload_expected_fatigue(payload):
+    """Expected day-after training response from digest payload."""
+    ef = payload.get("expected_fatigue")
+    if isinstance(ef, dict) and ef.get("level") not in (None, "none"):
+        return ef
+    tlc = payload.get("training_load_context") or {}
+    return tlc.get("expected_fatigue_today") or {}
+
+
+def magnitude_after_training_adjustment(field, block, expected_fatigue):
+    """Drop training-explained deviations so health_state matches coaching intent."""
+    magnitude = block.get("magnitude")
+    if not magnitude or magnitude == "noise":
+        return magnitude
+
+    level = (expected_fatigue or {}).get("level") or "none"
+    if level == "none":
+        return magnitude
+
+    delta = block.get("delta")
+    if field == "rhr_bpm" and delta is not None:
+        bump = safe_float(expected_fatigue.get("expected_rhr_bump")) or 0.0
+        if delta > 0 and delta <= bump + 3:
+            return None
+
+    if field in ("hrv_proxy_nocturnal", "hrv_rmssd_ms") and level in ("moderate", "high", "mild"):
+        if magnitude in ("mild", "significant") and (delta is None or delta <= 0):
+            return None
+
+    if field in TRAINING_EXPLAINABLE_FIELDS and level in ("moderate", "high"):
+        if magnitude == "mild":
+            return None
+
+    return magnitude
+
+
+def detect_patterns(
+    flags,
+    load_metrics,
+    hrv_status,
+    hrv_source=None,
+    wellness_window=None,
+    ctl_floor=30,
+    expected_fatigue=None,
+):
     flagset = set(flags)
     patterns = []
+    ef_level = (expected_fatigue or {}).get("level") or "none"
 
     if (
-        "rhr_elevated_7d" in flagset
+        ef_level not in ("moderate", "high")
+        and "rhr_elevated_7d" in flagset
         and ("waking_rr_up" in flagset or "sleep_rr_up" in flagset)
         and ("sleep_fragmented" in flagset or "body_battery_low" in flagset)
     ):
@@ -636,13 +692,16 @@ def detect_illness_watch(
 def compute_health_state(payload, ctl_floor=30):
     """Walk the rule list red → yellow → green; first match wins."""
     wellness = payload.get("today_wellness", {}) or {}
+    expected_fatigue = payload_expected_fatigue(payload)
+    ef_level = expected_fatigue.get("level") or "none"
+
     magnitudes = []
-    for block in wellness.values():
+    for field, block in wellness.items():
         if not isinstance(block, dict):
             continue
         if block.get("confidence") == "low":
             continue
-        m = block.get("magnitude")
+        m = magnitude_after_training_adjustment(field, block, expected_fatigue)
         if m:
             magnitudes.append(m)
     n_strong = sum(1 for m in magnitudes if m == "strong")
@@ -661,17 +720,30 @@ def compute_health_state(payload, ctl_floor=30):
     ctl = load.get("ctl") or 0
     hrv = (payload.get("garmin_status", {}) or {}).get("hrv_status")
     pattern_ids = {p.get("id") for p in payload.get("patterns", []) or []}
+    risk_patterns = pattern_ids & RISK_PATTERN_IDS
+    if ef_level in ("moderate", "high") and not illness_watch:
+        risk_patterns -= {"pre_illness_signal"}
 
     load_overreach = load_ratio >= 1.3 and ctl >= ctl_floor
+    hrv_red = hrv in {"low", "poor"}
+    if hrv_red and ef_level in ("moderate", "high") and not illness_watch:
+        hrv_red = False
 
-    if (
+    red = (
         n_strong >= 1
         or n_significant >= 2
         or illness_watch
         or load_overreach
-        or pattern_ids & RISK_PATTERN_IDS
-        or hrv in {"low", "poor"}
-    ):
+        or bool(risk_patterns)
+        or hrv_red
+    )
+    if red:
+        if (
+            ef_level in ("moderate", "high")
+            and not illness_watch
+            and not load_overreach
+        ):
+            return "yellow"
         return "red"
 
     days_since_rest = (payload.get("last_7d", {}) or {}).get("days_since_rest") or 0
@@ -680,6 +752,7 @@ def compute_health_state(payload, ctl_floor=30):
         n_significant == 1
         or n_mild >= 2
         or hrv == "unbalanced"
+        or hrv in {"low", "poor"}
         or load_yellow
         or days_since_rest >= 7
     ):

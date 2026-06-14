@@ -309,6 +309,53 @@ def test_compute_health_state_green_when_all_noise():
     assert digest_features.compute_health_state(payload) == "green"
 
 
+def test_compute_health_state_training_fatigue_downgrades_red_to_yellow():
+    payload = {
+        "today_wellness": {
+            "rhr_bpm": {
+                "magnitude": "significant",
+                "delta": 3,
+                "confidence": "high",
+            },
+            "hrv_proxy_nocturnal": {
+                "magnitude": "significant",
+                "delta": -5,
+                "confidence": "high",
+            },
+            "sleep_minutes": {"magnitude": "noise", "confidence": "high"},
+        },
+        "load": {"load_ratio": 1.0, "ctl": 40},
+        "garmin_status": {"hrv_status": "low"},
+        "patterns": [{"id": "pre_illness_signal", "note": "x"}],
+        "last_7d": {"days_since_rest": 1},
+        "training_load_context": {
+            "expected_fatigue_today": {
+                "level": "moderate",
+                "expected_rhr_bump": 2.5,
+                "source_session": "Hard ride 2026-06-03",
+            }
+        },
+    }
+    assert digest_features.compute_health_state(payload) == "yellow"
+
+
+def test_magnitude_after_training_adjustment_rhr_within_bump():
+    block = {"magnitude": "significant", "delta": 4}
+    ef = {"level": "moderate", "expected_rhr_bump": 2.5}
+    assert digest_features.magnitude_after_training_adjustment("rhr_bpm", block, ef) is None
+
+
+def test_patterns_skip_pre_illness_during_expected_fatigue():
+    flags = ["rhr_elevated_7d", "waking_rr_up", "sleep_fragmented"]
+    patterns = digest_features.detect_patterns(
+        flags,
+        {"load_ratio": 1.0},
+        "low",
+        expected_fatigue={"level": "moderate"},
+    )
+    assert not any(p["id"] == "pre_illness_signal" for p in patterns)
+
+
 def test_build_yesterday_uses_calendar_day_not_last_workout():
     target = date(2026, 5, 25)
     yesterday = target - timedelta(days=1)

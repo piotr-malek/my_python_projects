@@ -136,6 +136,7 @@ class DigestPayloadBuilder:
             hrv_source=hrv_source,
             wellness_window=wellness_window,
             ctl_floor=self._settings.CTL_FLOOR,
+            expected_fatigue=expected_fatigue,
         )
         sources_used = self._sources_used(last_7d["weekly_tss_by_source"])
         garmin_fitness_available = bool(

@@ -92,7 +92,7 @@ Metrics Connect exposes that the pipeline *doesn't* know about yet (skin tempera
 
 Digest generation runs through **Ollama** only (`OLLAMA_HOST`, `OLLAMA_MODEL` in `.env`). Make sure the daemon is up (`ollama serve`) and the model is pulled (`ollama pull qwen3:14b-q4_K_M`).
 
-I run `qwen3:14b-q4_K_M` on a MacBook Air M4 with 32 GB RAM — works well, digest in under a minute. A 7–8B model is fine on lighter hardware; commentary may be a bit shallower but still usable. `--skip-llm` runs analytics without calling Ollama, handy while debugging ingest.
+I run `qwen3:14b-q4_K_M` on a MacBook Air M4 with 32 GB RAM — works well, digest ready in 5-10 minutes. A 7–8B model is fine on lighter hardware; commentary may be a bit shallower but still usable. `--skip-llm` runs analytics without calling Ollama, handy while debugging ingest.
 
 The prompt lives in `llm/prompts/daily_digest.txt`. That's the main dial for tone, priorities, and what the model is allowed to say. The analytics layer already encodes a lot of "don't panic about normal post-workout fatigue" — the prompt reinforces it.
 

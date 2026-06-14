@@ -92,7 +92,7 @@ def _resolve_ollama_model(model: str) -> str:
 			val = (dotenv_values(p).get("OLLAMA_MODEL") or "").strip()
 			if val:
 				return val
-	return model or "mistral:7b"
+	return model or "qwen3:14b-q4_K_M"
 
 
 def send_prompt_to_ollama(

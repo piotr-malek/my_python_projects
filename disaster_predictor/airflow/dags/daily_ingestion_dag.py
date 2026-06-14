@@ -8,7 +8,7 @@ Fetches recent data from multiple sources and stores in daily_ingestion dataset:
 - OpenMeteo: Archive weather plus GloFAS river_discharge on openmeteo_weather; 7d forecast plus GloFAS on openmeteo_forecast — drought, backup, flood context
 - River discharge: Flood API (30d + 7d) merged into openmeteo_weather and openmeteo_forecast — flood, landslide modifiers/outlook
 
-Schedule: Daily at 09:30 UTC
+Schedule: None (triggered by run_daily.py; was 09:30 UTC cron)
 """
 
 from airflow import DAG, Dataset
@@ -149,7 +149,7 @@ with DAG(
     dag_id='daily_ingestion',
     default_args=default_args,
     description='Daily data ingestion for disaster prediction (ERA5, VIIRS, Landsat, OpenMeteo)',
-    schedule='30 9 * * *',  # Daily at 09:30 UTC
+    schedule=None,  # Manual trigger via run_daily.py
     start_date=datetime(2026, 2, 7),
     catchup=False,
     max_active_runs=1,

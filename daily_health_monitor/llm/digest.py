@@ -285,7 +285,10 @@ def generation_truncated(fields):
 def _fallback_training_note(payload, state):
     tlc = payload.get("training_load_context") or {}
     ef = tlc.get("expected_fatigue_today") or {}
-    rec = {"red": "rest", "yellow": "easy_optional", "green": "normal"}.get(state, "easy_optional")
+    if ef.get("level") in ("moderate", "high"):
+        rec = "easy_optional"
+    else:
+        rec = {"red": "rest", "yellow": "easy_optional", "green": "normal"}.get(state, "easy_optional")
     if ef.get("level") in ("moderate", "high"):
         lag = ef.get("source_days_ago") or 1
         lag_txt = "day-after" if lag == 1 else f"{lag}-day lag from"

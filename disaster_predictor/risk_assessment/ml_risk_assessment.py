@@ -8,6 +8,7 @@ Integrates with the existing Airflow DAG structure.
 import os
 import sys
 import json
+import gc
 import datetime
 import uuid
 import concurrent.futures
@@ -603,7 +604,6 @@ def assess_daily_risks(
                 preloaded_static=static_data
             )
 
-            import gc
             gc.collect()
 
             tasks = []

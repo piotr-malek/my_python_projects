@@ -7,7 +7,7 @@ forecast_outlook JSON columns). Skips assessment_ids already in weather_outlook
 Two LLM calls per assessment: one sentence recent, one sentence forecast. Appends
 to weather_outlook. Creates weather_outlook table if missing.
 
-Schedule: Triggered by risk_assessment DAG completion (via Dataset).
+Schedule: None (triggered by run_daily.py after job_digest; was Dataset on risk_assessment_complete).
 """
 
 from airflow import DAG, Dataset
@@ -77,7 +77,7 @@ with DAG(
     dag_id='risk_interpretation',
     default_args=default_args,
     description='LLM narrative for ML-only risk scores using recent and forecast outlook context',
-    schedule=[Dataset("disaster_predictor/risk_assessment_complete")],  # Triggered by assessment completion
+    schedule=None,  # Manual trigger via run_daily.py (after job_digest, post risk_assessment)
     start_date=datetime(2026, 2, 7),
     catchup=False,
     max_active_runs=1,

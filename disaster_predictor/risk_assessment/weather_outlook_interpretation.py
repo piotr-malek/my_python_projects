@@ -43,7 +43,7 @@ from llm_interaction.ollama_utils import send_prompt_to_ollama
 
 PROJECT_ID = os.getenv("PROJECT_ID")
 RISK_DATASET = "risk_assessment"
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:7b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:14b-q4_K_M")
 BATCH_SIZE = int(os.getenv("WEATHER_OUTLOOK_BATCH_SIZE", "50"))
 MAX_OUTPUT_TOKENS = int(os.getenv("WEATHER_OUTLOOK_MAX_OUTPUT_TOKENS", "120"))
 _NUM_CTX_RAW = (os.getenv("WEATHER_OUTLOOK_NUM_CTX") or "").strip()
