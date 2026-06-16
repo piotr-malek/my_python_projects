@@ -46,48 +46,68 @@ def _mailer():
     return DigestMailer.__new__(DigestMailer)
 
 
-def test_subject_uses_digest_headline():
+def test_subject_green_after_training_stays_all_clear():
     digest = (
-        "# Physiology Digest — 2026-05-25\n"
-        "🟢 **Yesterday's hard ride is showing up in the numbers this morning.**\n"
+        "# Physiology Digest — 2026-06-16\n"
+        "🟢 **Yesterday's moderate ride is showing up in your numbers — normal, and it'll clear.**\n"
     )
-    subject = _mailer()._subject({}, date(2026, 5, 25), digest)
-    assert subject == (
-        "Physiology Digest \u2014 2026-05-25 \u2014 "
-        "Yesterday's hard ride is showing up in the numbers this morning."
-    )
-    assert "rest day" not in subject
-
-
-def test_subject_falls_back_to_top_insight():
     subject = _mailer()._subject(
         {
             "digest_payload": {
-                "insights": [{"summary": "REM has held above your norm four nights running."}],
-                "health_state": "red",
+                "health_state": "green",
+                "insights": [{"category": "training_response"}],
+                "training_load_context": {
+                    "expected_fatigue_today": {"level": "moderate"},
+                },
             }
         },
-        date(2026, 5, 25),
+        date(2026, 6, 16),
+        digest,
     )
-    assert "REM has held above your norm four nights running." in subject
-    assert "rest day" not in subject
+    assert subject == "Physiology \u2014 16 Jun \u2014 \U0001f7e2 all clear"
+    assert "ride" not in subject.lower()
+    assert "post" not in subject.lower()
 
 
-def test_subject_falls_back_to_training_recovery():
+def test_subject_yellow_training_response_recovery_soft():
     subject = _mailer()._subject(
         {
             "digest_payload": {
                 "health_state": "yellow",
-                "training_load_context": {
-                    "expected_fatigue_today": {"level": "moderate", "source_session": "Hard ride"},
-                },
+                "insights": [{"category": "training_response"}],
+            }
+        },
+        date(2026, 6, 16),
+    )
+    assert subject == "Physiology \u2014 16 Jun \u2014 \U0001f7e1 recovery soft"
+
+
+def test_subject_uses_insight_category():
+    subject = _mailer()._subject(
+        {
+            "digest_payload": {
+                "insights": [{"category": "sleep", "summary": "REM has held above your norm."}],
+                "health_state": "yellow",
             }
         },
         date(2026, 5, 25),
     )
-    assert subject.endswith("expected training recovery")
+    assert subject == "Physiology \u2014 25 May \u2014 \U0001f7e1 sleep off"
 
 
-def test_subject_falls_back_when_no_state():
+def test_subject_falls_back_to_health_state():
+    subject = _mailer()._subject(
+        {
+            "digest_payload": {
+                "health_state": "red",
+                "insights": [],
+            }
+        },
+        date(2026, 5, 25),
+    )
+    assert subject == "Physiology \u2014 25 May \u2014 \U0001f534 rest day"
+
+
+def test_subject_when_no_payload():
     subject = _mailer()._subject({}, date(2026, 5, 25))
-    assert subject == "Physiology Digest \u2014 2026-05-25"
+    assert subject == "Physiology \u2014 25 May"

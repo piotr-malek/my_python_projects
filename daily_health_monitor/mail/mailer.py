@@ -1,4 +1,3 @@
-import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -8,8 +7,21 @@ from jinja2 import Template
 
 from mail.markdown_html import markdown_to_html
 
-_HEADLINE_RE = re.compile(r"^[^\n]*\*\*(.+?)\*\*", re.MULTILINE)
-_SUBJECT_MAX_LEN = 72
+_STATE_MARKERS = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+_STATE_LABELS = {
+    "green": "all clear",
+    "yellow": "easy day",
+    "red": "rest day",
+}
+# Only used when yellow/red — names the health angle, not the workout.
+_HEALTH_CATEGORY_LABELS = {
+    "stress": "stress up",
+    "sleep": "sleep off",
+    "recovery": "recovery low",
+    "circadian": "rhythm off",
+    "illness_watch": "health watch",
+    "cognitive": "focus low",
+}
 
 
 class DigestMailer:
@@ -41,54 +53,34 @@ class DigestMailer:
         msg.attach(MIMEText(self._render_html(digest_text, target), "html", "utf-8"))
         return msg
 
-    @staticmethod
-    def _truncate(text, limit=_SUBJECT_MAX_LEN):
-        text = " ".join(str(text).split())
-        if len(text) <= limit:
-            return text
-        return text[: limit - 1].rstrip() + "…"
-
     @classmethod
-    def _extract_headline(cls, digest_text):
-        if not digest_text:
-            return None
-        match = _HEADLINE_RE.search(digest_text)
-        if match:
-            return match.group(1).strip()
-        fallback = re.search(r"\*\*(.+?)\*\*", digest_text)
-        return fallback.group(1).strip() if fallback else None
-
-    @classmethod
-    def _subject_suffix(cls, analysis, digest_text=None):
-        headline = cls._extract_headline(digest_text)
-        if headline:
-            return cls._truncate(headline)
-
+    def _subject_suffix(cls, analysis):
+        """Short health status — headline stays in the email body."""
         payload = analysis.get("digest_payload") or {}
-        insights = payload.get("insights") or []
-        if insights and isinstance(insights[0], dict):
-            summary = insights[0].get("summary")
-            if summary:
-                return cls._truncate(summary)
-
-        ef = (payload.get("training_load_context") or {}).get("expected_fatigue_today") or {}
-        if ef.get("level") in ("moderate", "high"):
-            return "expected training recovery"
-        if ef.get("level") == "mild":
-            return "light training recovery"
-
         state = payload.get("health_state")
-        return {
-            "green": "all clear",
-            "yellow": "easy day",
-            "red": "recovery focus",
-        }.get(state)
+        marker = _STATE_MARKERS.get(state, "")
+        label = _STATE_LABELS.get(state)
+
+        if state in ("yellow", "red"):
+            insights = payload.get("insights") or []
+            category = (
+                insights[0].get("category") if insights and isinstance(insights[0], dict) else None
+            )
+            if category in _HEALTH_CATEGORY_LABELS:
+                label = _HEALTH_CATEGORY_LABELS[category]
+            elif category == "training_response":
+                label = "recovery soft" if state == "yellow" else "rest day"
+
+        if not label:
+            return None
+        return f"{marker} {label}".strip() if marker else label
 
     def _subject(self, analysis, target, digest_text=None):
-        suffix = self._subject_suffix(analysis, digest_text)
+        suffix = self._subject_suffix(analysis)
+        date_short = target.strftime("%d %b")
         if suffix:
-            return f"Physiology Digest \u2014 {target.isoformat()} \u2014 {suffix}"
-        return f"Physiology Digest \u2014 {target.isoformat()}"
+            return f"Physiology \u2014 {date_short} \u2014 {suffix}"
+        return f"Physiology \u2014 {date_short}"
 
     def _render_html(self, digest_text, target):
         return self._html_template.render(
