@@ -16,3 +16,6 @@ __pycache__/
 
 # Trained model binaries (GitHub limit 100MB; store in object storage or Git LFS)
 models/*.pkl
+
+# Ephemeral display-name pipeline working file
+templates/regions_creation/region_display_names.pending.json
