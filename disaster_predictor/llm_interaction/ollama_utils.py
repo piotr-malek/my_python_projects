@@ -95,6 +95,27 @@ def _resolve_ollama_model(model: str) -> str:
 	return model or "qwen3:14b-q4_K_M"
 
 
+def _resolve_ollama_think(model: str, think: bool | None) -> bool | None:
+	"""
+	Whether to pass top-level think= to Ollama generate/chat.
+
+	Qwen3 defaults to thinking mode: reasoning tokens consume num_predict, often
+	leaving response empty for short caps (e.g. 120). think must be top-level
+	(not inside options) or Ollama ignores it.
+	"""
+	if think is not None:
+		return think
+	env_raw = (os.getenv("OLLAMA_THINK") or "").strip().lower()
+	if env_raw in ("1", "true", "yes", "on"):
+		return True
+	if env_raw in ("0", "false", "no", "off"):
+		return False
+	# Hybrid Qwen3 tags (qwen3:14b, qwen3.5:9b, …) need think disabled for short outputs.
+	if "qwen3" in (model or "").lower():
+		return False
+	return None
+
+
 def send_prompt_to_ollama(
 	model,
 	prompt,
@@ -103,6 +124,7 @@ def send_prompt_to_ollama(
 	top_k=40,
 	max_output_tokens=2048,
 	num_ctx=None,
+	think: bool | None = None,
 ):
 	"""
 	Send prompt to a locally running Ollama model.
@@ -115,12 +137,14 @@ def send_prompt_to_ollama(
 		top_k: Top-k sampling parameter. Default 40.
 		max_output_tokens: Maximum tokens to generate. Default 2048.
 		num_ctx: KV cache / context length cap (smaller = faster for short prompts). None uses OLLAMA_NUM_CTX env if set, else model default.
+		think: Ollama thinking mode (top-level API flag). None auto-disables for qwen3* unless OLLAMA_THINK is set.
 	
 	Returns:
 		str: The generated response text.
 	"""
 	ollama_model = _resolve_ollama_model(model)
 	ollama_host = _resolve_ollama_host()
+	ollama_think = _resolve_ollama_think(ollama_model, think)
 
 	if num_ctx is None:
 		env_ctx = (os.getenv("OLLAMA_NUM_CTX") or "").strip()
@@ -144,14 +168,19 @@ def send_prompt_to_ollama(
 		if num_ctx is not None:
 			options["num_ctx"] = num_ctx
 
-		response = client.generate(
-			model=ollama_model,
-			prompt=prompt,
-			options=options,
-		)
+		generate_kwargs = {
+			"model": ollama_model,
+			"prompt": prompt,
+			"options": options,
+		}
+		if ollama_think is not None:
+			generate_kwargs["think"] = ollama_think
+
+		response = client.generate(**generate_kwargs)
 		
 		# Extract response text
 		response_text = response.get('response', '')
+		thinking_text = response.get('thinking') or ''
 		
 		# Check if response was truncated
 		if response.get('done', False) is False:
@@ -163,7 +192,16 @@ def send_prompt_to_ollama(
 		
 		# Handle potential empty response
 		if not response_text:
-			warnings.warn("Empty response received from Ollama")
+			if thinking_text:
+				warnings.warn(
+					"Empty response from Ollama but thinking tokens were generated "
+					f"(model={ollama_model!r}, think={ollama_think!r}, "
+					f"max_output_tokens={max_output_tokens}). "
+					"Qwen3 thinking mode likely consumed the token budget; "
+					"use think=False (default for qwen3*) or raise max_output_tokens."
+				)
+			else:
+				warnings.warn("Empty response received from Ollama")
 			return ""
 		
 		return response_text

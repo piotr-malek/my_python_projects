@@ -394,8 +394,14 @@ def process_weather_outlook(max_workers: Optional[int] = None) -> None:
         print("All matching assessments already have interpretations in weather_outlook.")
         return
 
-    # Fail fast before spinning up large worker pools if Ollama is unreachable.
-    _call_llm_for_interpretation("Reply with OK.", temperature=0.0)
+    # Fail fast before spinning up large worker pools if Ollama is unreachable or returns empty.
+    probe = _call_llm_for_interpretation("Reply with OK.", temperature=0.0)
+    if not probe:
+        raise RuntimeError(
+            f"Ollama probe returned empty text (model={OLLAMA_MODEL}). "
+            "For Qwen3 models, ensure think=False is sent (see llm_interaction/ollama_utils.py) "
+            "or increase WEATHER_OUTLOOK_MAX_OUTPUT_TOKENS."
+        )
 
     ca_range = _format_created_at_range(to_process)
     print(
