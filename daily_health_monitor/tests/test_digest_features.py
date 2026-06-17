@@ -27,8 +27,20 @@ def test_intensity_label_tiers():
 def test_is_hard_day_composite_rule():
     assert digest_features.is_hard_day(80, 0, 0)
     assert digest_features.is_hard_day(0, 90, 0)
-    assert digest_features.is_hard_day(0, 0, 60)
+    assert not digest_features.is_hard_day(0, 0, 60)
     assert not digest_features.is_hard_day(50, 50, 30)
+
+
+def test_build_last_7d_no_activities_does_not_use_intensity_minutes_for_hard_day():
+    target = date(2026, 5, 25)
+    im = pd.DataFrame(
+        [
+            {"date": target - timedelta(days=1), "intensity_minutes": 90},
+            {"date": target - timedelta(days=2), "intensity_minutes": 70},
+        ]
+    )
+    out = digest_features.build_last_7d(pd.DataFrame(), im, target)
+    assert out["hard_day_count"] == 0
 
 
 def test_infer_tss_source_priority():

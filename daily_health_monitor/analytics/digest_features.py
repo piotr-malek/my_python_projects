@@ -93,7 +93,6 @@ def is_hard_day(tss, suffer, intensity_minutes):
     return (
         (safe_float(tss) or 0) >= 80
         or (safe_float(suffer) or 0) >= 80
-        or (safe_float(intensity_minutes) or 0) >= 60
     )
 
 
@@ -210,7 +209,7 @@ def build_last_7d(activities_7d, intensity_minutes_df, target):
         out["weekly_intensity_minutes"] = int(sum(intensity_by_date.values()))
 
     if activities_7d is None or activities_7d.empty:
-        out["hard_day_count"] = sum(1 for v in intensity_by_date.values() if v >= 60)
+        out["hard_day_count"] = 0
         out["days_since_rest"] = _days_since_rest(set(), target)
         out["total_minutes_hm"] = format_minutes_hm(out["total_minutes"])
         return out
