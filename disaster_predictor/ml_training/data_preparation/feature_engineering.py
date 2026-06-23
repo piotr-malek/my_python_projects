@@ -88,22 +88,49 @@ def compute_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def compute_spi_feature(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute SPI30 (Standardized Precipitation Index, 30-day scale)."""
+def compute_spi_feature(
+    df: pd.DataFrame,
+    precip_history: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """Compute SPI30 (Standardized Precipitation Index, 30-day scale).
+
+    When ``precip_history`` is provided (climatology + recent daily precip), SPI is
+    calibrated on the full series and mapped back onto ``df`` rows. This matches
+    training and avoids short-window inference artifacts.
+    """
     df = df.copy()
     df = df.sort_values(['region', 'date']).reset_index(drop=True)
-    
+
     if 'precipitation_sum_mm' not in df.columns:
         df['spi30'] = np.nan
         return df
-    
+
     spi_values = []
     for region in df['region'].unique():
         region_mask = df['region'] == region
-        region_precip = df.loc[region_mask, 'precipitation_sum_mm']
-        spi_series = compute_spi(region_precip, scale=30)
-        spi_values.extend(spi_series.values)
-    
+        region_df = df.loc[region_mask]
+
+        if precip_history is not None and not precip_history.empty:
+            rh = precip_history[precip_history['region'] == region][
+                ['date', 'precipitation_sum_mm']
+            ].copy()
+            rw = region_df[['date', 'precipitation_sum_mm']].rename(
+                columns={'precipitation_sum_mm': '_recent_precip'}
+            )
+            combined = rh.merge(rw, on='date', how='outer')
+            combined['precipitation_sum_mm'] = combined['_recent_precip'].combine_first(
+                combined['precipitation_sum_mm']
+            )
+            combined = combined.drop(columns=['_recent_precip']).sort_values('date')
+            spi_series = compute_spi(combined['precipitation_sum_mm'], scale=30)
+            spi_by_date = dict(zip(combined['date'], spi_series.values))
+            for obs_date in region_df['date']:
+                spi_values.append(spi_by_date.get(obs_date, np.nan))
+        else:
+            region_precip = region_df['precipitation_sum_mm']
+            spi_series = compute_spi(region_precip, scale=30)
+            spi_values.extend(spi_series.values)
+
     df['spi30'] = spi_values
     return df
 
@@ -269,17 +296,21 @@ def compute_temporal_metadata(df: pd.DataFrame) -> pd.DataFrame:
 def engineer_features(
     df: pd.DataFrame,
     climatology: Optional[pd.DataFrame] = None,
-    compute_climatology_from_data: bool = False
+    compute_climatology_from_data: bool = False,
+    spi_precip_history: Optional[pd.DataFrame] = None,
 ) -> tuple:
     """Main feature engineering pipeline. Returns (features_df, climatology_df).
     
     By default, loads climatology from BigQuery. Set compute_climatology_from_data=True
     to compute from df instead (slower, only needed if climatology table doesn't exist).
+
+    Pass ``spi_precip_history`` at inference when ``df`` spans only a short recent
+    window so SPI30 uses the same long precip record as training.
     """
     df = df.copy()
     
     df = compute_temporal_features(df)
-    df = compute_spi_feature(df)
+    df = compute_spi_feature(df, precip_history=spi_precip_history)
     df = compute_temporal_metadata(df)
     
     if climatology is None:

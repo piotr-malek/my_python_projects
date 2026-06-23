@@ -40,6 +40,8 @@ from ml_training.data_preparation.load_training_data import (
     load_river_discharge_data,
     merge_datasets,
     handle_missing_data,
+    forward_fill_ndvi_columns,
+    load_spi_precip_history,
 )
 from ml_training.data_preparation.descriptor_encoding import (
     apply_descriptor_string_encodings,
@@ -177,14 +179,28 @@ class ModelPredictor:
             return pd.DataFrame()
 
         merged = apply_descriptor_string_encodings(merged, self.descriptor_string_encodings)
+        if 'ndvi_mean' in merged.columns:
+            merged = forward_fill_ndvi_columns(merged)
         clean = handle_missing_data(merged, REQUIRED_FEATURES)
         
         # Free memory from intermediate dataframes
         del merged
         import gc
         gc.collect()
+
+        spi_precip_history = None
+        if preloaded_data is not None or dataset_id == 'daily_ingestion':
+            spi_precip_history = load_spi_precip_history(
+                regions=regions,
+                end_date=end_date,
+                recent_precip=clean[['date', 'region', 'precipitation_sum_mm']],
+            )
         
-        features, _ = engineer_features(clean, compute_climatology_from_data=False)
+        features, _ = engineer_features(
+            clean,
+            compute_climatology_from_data=False,
+            spi_precip_history=spi_precip_history,
+        )
         
         return features
     

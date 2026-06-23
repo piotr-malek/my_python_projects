@@ -33,6 +33,8 @@ from utils.bq_utils import save_to_bigquery, load_from_bigquery
 from utils.earth_engine_utils import REGION_NAMES
 from risk_assessment.ml_detection import MLDisasterDetection
 from config import get_region_name
+from ml_training.config import MODIS_FORWARD_FILL_WINDOW
+from ml_training.data_preparation.load_training_data import forward_fill_ndvi_columns
 
 PROJECT_ID = os.getenv("PROJECT_ID")
 # Risk data is stored in risk_assessment dataset (not region-specific)
@@ -311,6 +313,9 @@ def preload_all_weather(project_id, dataset_id, assessment_date, regions=None, d
     """Fetch weather data for regions in one query."""
     start_date = (assessment_date - datetime.timedelta(days=days_back)).isoformat()
     end_date = assessment_date.isoformat()
+    landsat_start = (
+        assessment_date - datetime.timedelta(days=days_back + MODIS_FORWARD_FILL_WINDOW)
+    ).isoformat()
     
     where_clause = ""
     if regions:
@@ -337,12 +342,12 @@ def preload_all_weather(project_id, dataset_id, assessment_date, regions=None, d
     WHERE date >= '{start_date}' AND date <= '{end_date}' {om_where_clause}
     """
     
-    # 3. Load NDVI (Landsat)
+    # 3. Load NDVI (Landsat) — extra lookback seeds forward-fill inside the weather window
     landsat_query = f"""
     SELECT 
         date, region, ndvi_mean
     FROM `{project_id}.{dataset_id}.landsat`
-    WHERE date >= '{start_date}' AND date <= '{end_date}' {where_clause}
+    WHERE date >= '{landsat_start}' AND date <= '{end_date}' {where_clause}
     """
     
     # 4. Load VIIRS Fire data
@@ -379,7 +384,20 @@ def preload_all_weather(project_id, dataset_id, assessment_date, regions=None, d
                 landsat_df['date'] = pd.to_datetime(landsat_df['date'])
                 # Deduplicate landsat data
                 landsat_df = landsat_df.sort_values(['region', 'date']).drop_duplicates(subset=['region', 'date'], keep='last')
-                era5_df = era5_df.merge(landsat_df, on=['date', 'region'], how='left')
+                window_start = pd.Timestamp(start_date)
+                prior_ndvi = (
+                    landsat_df[landsat_df['date'] < window_start]
+                    .groupby('region', as_index=False)['ndvi_mean']
+                    .last()
+                    .rename(columns={'ndvi_mean': 'ndvi_seed'})
+                )
+                landsat_window = landsat_df[landsat_df['date'] >= window_start]
+                era5_df = era5_df.merge(landsat_window, on=['date', 'region'], how='left')
+                if not prior_ndvi.empty:
+                    era5_df = era5_df.merge(prior_ndvi, on='region', how='left')
+                    seed_mask = era5_df['ndvi_mean'].isna() & era5_df['ndvi_seed'].notna()
+                    era5_df.loc[seed_mask, 'ndvi_mean'] = era5_df.loc[seed_mask, 'ndvi_seed']
+                    era5_df = era5_df.drop(columns=['ndvi_seed'])
                 # burned_area_pct is optional and only exists in MODIS (historical)
                 # Landsat doesn't have this column, so set to NULL for consistency with model expectations
                 era5_df['burned_area_pct'] = np.nan
@@ -400,6 +418,9 @@ def preload_all_weather(project_id, dataset_id, assessment_date, regions=None, d
             print(f"Warning: Could not preload VIIRS: {e}")
             era5_df['hotspot_count'] = 0
             era5_df['frp_mean'] = 0.0
+
+        if 'ndvi_mean' in era5_df.columns:
+            era5_df = forward_fill_ndvi_columns(era5_df)
             
         return era5_df
     except Exception as e:
@@ -527,7 +548,8 @@ def assess_daily_risks(
     region_name: str = None,
     disaster_types: list = None,
     max_workers: int = 5,
-    chunk_size: int = 50
+    chunk_size: int = 50,
+    assessment_date: Optional[datetime.date] = None,
 ):
     """
     Assess risks for all regions and disaster types using ML models.
@@ -541,8 +563,9 @@ def assess_daily_risks(
     
     # Risk data is stored in risk_assessment dataset (not region-specific)
     dataset_id = RISK_DATASET
-    # Always assess yesterday (previous complete day)
-    assessment_date = (datetime.datetime.now() - datetime.timedelta(days=1)).date()
+    # Default: yesterday (previous complete day)
+    if assessment_date is None:
+        assessment_date = (datetime.datetime.now() - datetime.timedelta(days=1)).date()
     assessment_date_pd = pd.to_datetime(assessment_date)
     
     if region_name is None:

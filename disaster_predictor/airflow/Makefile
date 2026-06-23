@@ -9,6 +9,7 @@ sync:
 	@echo "Syncing parent modules to include/..."
 	@mkdir -p include
 	@touch include/__init__.py
+	@rm -f include/config\ 2 include/utils\ 2 include/risk_assessment\ 2 include/llm_interaction\ 2 include/ml_training\ 2
 	@if [ -f ../.env ]; then \
 		rm -f .env && cp ../.env .env && echo "  ✓ .env copied from project root"; \
 	fi
@@ -36,11 +37,12 @@ sync-links:
 	@echo "Creating symlinks in include/ (for local dev)..."
 	@mkdir -p include
 	@touch include/__init__.py
+	@rm -f include/config\ 2 include/utils\ 2 include/risk_assessment\ 2 include/llm_interaction\ 2 include/ml_training\ 2
 	@rm -rf include/utils include/config include/risk_assessment include/llm_interaction include/ml_training
-	@ln -sf ../utils include/utils
-	@ln -sf ../config include/config
-	@ln -sf ../risk_assessment include/risk_assessment
-	@ln -sf ../llm_interaction include/llm_interaction
-	@ln -sf ../ml_training include/ml_training
+	@ln -sf ../../utils include/utils
+	@ln -sf ../../config include/config
+	@ln -sf ../../risk_assessment include/risk_assessment
+	@ln -sf ../../llm_interaction include/llm_interaction
+	@ln -sf ../../ml_training include/ml_training
 	@ln -sf ../.env .env 2>/dev/null || true
 	@echo "Done! include/ now has symlinks for local development"

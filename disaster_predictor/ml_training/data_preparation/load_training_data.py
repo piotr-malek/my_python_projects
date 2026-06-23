@@ -35,6 +35,21 @@ from ml_training.config import (
     DISCHARGE_DAILY_TABLE,
 )
 
+_SPI_PRECIP_CACHE: dict = {}
+
+
+def _spi_precip_cache_key(
+    regions: Optional[List[str]],
+    end_date: Optional[str],
+) -> tuple:
+    region_key = tuple(sorted(regions)) if regions else ("__all__",)
+    return (region_key, end_date or "")
+
+
+def clear_spi_precip_cache() -> None:
+    """Clear cached climatology precip used for SPI at inference."""
+    _SPI_PRECIP_CACHE.clear()
+
 
 def _build_year_filter(
     dataset_id: str,
@@ -598,6 +613,102 @@ def load_river_discharge_data(
     combined = combined.sort_values(["region", "date", "_discharge_src"])
     combined = combined.drop_duplicates(subset=["date", "region"], keep="last")
     return combined.drop(columns=["_discharge_src"], errors="ignore")
+
+
+def forward_fill_ndvi_columns(
+    df: pd.DataFrame,
+    limit: int = MODIS_FORWARD_FILL_WINDOW,
+) -> pd.DataFrame:
+    """Forward-fill sparse Landsat/MODIS NDVI onto daily weather rows (per region)."""
+    if df.empty or 'ndvi_mean' not in df.columns:
+        return df
+
+    df = df.sort_values(['region', 'date']).copy()
+    if 'burned_area_pct' not in df.columns:
+        df['burned_area_pct'] = np.nan
+
+    parts = []
+    for _, region_df in df.groupby('region', sort=False):
+        region_df = region_df.copy()
+        region_df['ndvi_mean'] = region_df['ndvi_mean'].ffill(limit=limit)
+        region_df['burned_area_pct'] = region_df['burned_area_pct'].ffill(limit=limit)
+        parts.append(region_df)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=FutureWarning,
+            message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated.*",
+        )
+        return pd.concat(parts, ignore_index=True).sort_values(['region', 'date'])
+
+
+def load_spi_precip_history(
+    regions: Optional[List[str]] = None,
+    end_date: Optional[str] = None,
+    recent_precip: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """Long-run daily precip for SPI: climatology ERA5 plus recent daily_ingestion overrides."""
+    cache_key = _spi_precip_cache_key(regions, end_date)
+    base = _SPI_PRECIP_CACHE.get(cache_key)
+    if base is None:
+        hist = load_era5_data(
+            regions=regions,
+            start_date=ERA5_START,
+            end_date=ERA5_END,
+            dataset_id=CLIMATOLOGY_DATASET,
+        )
+        if hist is None or hist.empty:
+            base = pd.DataFrame(columns=['date', 'region', 'precipitation_sum_mm'])
+        else:
+            base = hist[['date', 'region', 'precipitation_sum_mm']].copy()
+            base['date'] = pd.to_datetime(base['date']).dt.normalize()
+
+        if end_date and pd.Timestamp(end_date) > pd.Timestamp(ERA5_END):
+            recent_era5 = load_era5_data(
+                regions=regions,
+                start_date=(pd.Timestamp(ERA5_END) + pd.Timedelta(days=1)).strftime('%Y-%m-%d'),
+                end_date=end_date,
+                dataset_id='daily_ingestion',
+            )
+            if recent_era5 is not None and not recent_era5.empty:
+                recent_era5 = recent_era5[['date', 'region', 'precipitation_sum_mm']].copy()
+                recent_era5['date'] = pd.to_datetime(recent_era5['date']).dt.normalize()
+                base = base.merge(
+                    recent_era5.rename(columns={'precipitation_sum_mm': '_recent_precip'}),
+                    on=['date', 'region'],
+                    how='outer',
+                )
+                base['precipitation_sum_mm'] = base['_recent_precip'].combine_first(
+                    base['precipitation_sum_mm']
+                )
+                base = base.drop(columns=['_recent_precip'])
+
+        base = base.sort_values(['region', 'date']).reset_index(drop=True)
+        _SPI_PRECIP_CACHE[cache_key] = base
+    else:
+        base = base.copy()
+
+    if recent_precip is None or recent_precip.empty:
+        return base
+
+    recent_all = recent_precip[['date', 'region', 'precipitation_sum_mm']].copy()
+    recent_all['date'] = pd.to_datetime(recent_all['date']).dt.normalize()
+    recent_all = recent_all.sort_values(['region', 'date']).drop_duplicates(
+        subset=['region', 'date'], keep='last'
+    )
+
+    merged = base.merge(
+        recent_all.rename(columns={'precipitation_sum_mm': '_recent_precip'}),
+        on=['date', 'region'],
+        how='outer',
+    )
+    merged['precipitation_sum_mm'] = merged['_recent_precip'].combine_first(
+        merged['precipitation_sum_mm']
+    )
+    return merged.drop(columns=['_recent_precip']).sort_values(
+        ['region', 'date']
+    ).reset_index(drop=True)
 
 
 def forward_fill_modis(modis_df: pd.DataFrame) -> pd.DataFrame:

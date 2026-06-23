@@ -17,45 +17,15 @@ from datetime import datetime, timedelta
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-
-def setup_airflow_paths():
-    """
-    Set up sys.path for Airflow task execution.
-    Handles both production (/usr/local/airflow) and local development environments.
-    Loads .env file and adds include/ to sys.path for module imports.
-    """
-    import sys
-    import os
-    from pathlib import Path
-    from dotenv import load_dotenv
-    
-    # Determine actual airflow root (could be /usr/local/airflow or local dev path)
-    dag_dir = Path(__file__).resolve().parent
-    airflow_root_dir = dag_dir.parent
-    
-    # Load .env file - try airflow root first (works in Docker), then project root (local dev fallback)
-    for env_candidate in [airflow_root_dir / ".env", airflow_root_dir.parent / ".env"]:
-        if env_candidate.is_file():
-            load_dotenv(dotenv_path=env_candidate, override=True)
-            break
-    
-    # Add airflow root to sys.path (for include/ modules and direct imports)
-    airflow_root_str = str(airflow_root_dir)
-    if airflow_root_str not in sys.path:
-        sys.path.insert(0, airflow_root_str)
-    
-    # Add include/ directory to sys.path (for module imports like risk_assessment, utils, etc.)
-    include_path = airflow_root_dir / 'include'
-    include_path_str = str(include_path)
-    if include_path.exists() and include_path_str not in sys.path:
-        sys.path.insert(0, include_path_str)
+# Add airflow root and dags/ to path for imports
+_dags_dir = Path(__file__).resolve().parent
+sys.path.insert(0, str(_dags_dir.parent))
+sys.path.insert(0, str(_dags_dir))
 
 
 def interpret_weather_outlook_task(**context):
     """Task wrapper: high-risk assessments → LLM → weather_outlook table."""
+    from path_setup import setup_airflow_paths
     setup_airflow_paths()
     from risk_assessment.weather_outlook_interpretation import process_weather_outlook
     process_weather_outlook()

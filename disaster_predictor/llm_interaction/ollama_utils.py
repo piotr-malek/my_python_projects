@@ -125,6 +125,7 @@ def send_prompt_to_ollama(
 	max_output_tokens=2048,
 	num_ctx=None,
 	think: bool | None = None,
+	respect_global_model: bool = True,
 ):
 	"""
 	Send prompt to a locally running Ollama model.
@@ -138,11 +139,12 @@ def send_prompt_to_ollama(
 		max_output_tokens: Maximum tokens to generate. Default 2048.
 		num_ctx: KV cache / context length cap (smaller = faster for short prompts). None uses OLLAMA_NUM_CTX env if set, else model default.
 		think: Ollama thinking mode (top-level API flag). None auto-disables for qwen3* unless OLLAMA_THINK is set.
+		respect_global_model: When False, use `model` as-is (ignores OLLAMA_MODEL env override).
 	
 	Returns:
 		str: The generated response text.
 	"""
-	ollama_model = _resolve_ollama_model(model)
+	ollama_model = _resolve_ollama_model(model) if respect_global_model else (model or "qwen3:14b-q4_K_M")
 	ollama_host = _resolve_ollama_host()
 	ollama_think = _resolve_ollama_think(ollama_model, think)
 
