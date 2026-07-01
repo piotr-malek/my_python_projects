@@ -37,11 +37,13 @@ def sleep_debt_should_surface(debt: Dict[str, Any]) -> bool:
     """Surface sleep debt only when the rolling balance warrants attention."""
     if not debt:
         return False
+    last_night = debt.get("last_night_vs_norm_min")
+    if last_night is not None and last_night <= -90:
+        return True
     status = debt.get("status")
     if status == "notable_deficit":
         return True
     if status == "mild_deficit":
-        last_night = debt.get("last_night_vs_norm_min")
         return last_night is not None and last_night < -30
     return False
 
@@ -62,8 +64,10 @@ def compute_sleep_debt(sleep_df: pd.DataFrame, target: date, typical_duration_mi
     df["sleep_minutes"] = pd.to_numeric(df["sleep_minutes"], errors="coerce")
     df = df[df["sleep_start"].notna() & (df["sleep_minutes"] > 0)]
 
-    start = target - timedelta(days=7)
-    win = df[(df["date"] >= start) & (df["date"] < target)].sort_values("date")
+    # Garmin dates sleep to the wake-up morning. On digest day `target`, last night is
+    # the row with date == target (not target - 1).
+    start = target - timedelta(days=6)
+    win = df[(df["date"] >= start) & (df["date"] <= target)].sort_values("date")
     if win.empty:
         return empty
 
@@ -85,7 +89,7 @@ def compute_sleep_debt(sleep_df: pd.DataFrame, target: date, typical_duration_mi
         weighted = sum(w * d for w, d in zip(_SLEEP_DEBT_WEIGHTS, deltas))
         weighted_balance = int(round(weighted / sum(_SLEEP_DEBT_WEIGHTS)))
 
-    last_night_row = win[win["date"] == (target - timedelta(days=1))]
+    last_night_row = df[df["date"] == target]
     last_night_vs_norm = 0
     if not last_night_row.empty:
         last_actual = safe_float(last_night_row.iloc[-1]["sleep_minutes"])

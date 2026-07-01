@@ -324,4 +324,8 @@ class DigestPayloadBuilder:
     def _payload_last_workout(last_workout):
         if not last_workout:
             return None
-        return {k: v for k, v in last_workout.items() if k != "suffer_score"}
+        out = dict(last_workout)
+        suffer = out.pop("suffer_score", None)
+        if suffer is not None and "relative_effort" not in out:
+            out["relative_effort"] = suffer
+        return out

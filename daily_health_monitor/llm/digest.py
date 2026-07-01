@@ -8,6 +8,11 @@ import ollama
 
 from analytics.digest_features import ELEVATED_MAGNITUDES
 from analytics.training_load import format_fatigue_source_phrase
+from analytics.training_prescription import (
+    VALID_DURATION_HOURS,
+    VALID_SESSION_TYPES,
+    apply_training_clearance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +25,14 @@ TRAINING_NOTE_LABELS = {
     "easy_optional": "Easy movement optional — rest is also fine.",
     "easy_only": "Easy only today.",
     "normal": "Normal training is fine.",
-    "hard_ok": "Cleared for quality work.",
+    "hard_ok": "Good day for quality work.",
+}
+SESSION_TYPE_LABELS = {
+    "endurance_z2": "endurance Z2",
+    "tempo": "tempo",
+    "intervals": "intervals",
+    "recovery_spin": "recovery spin",
+    "rest": "rest",
 }
 THEME_HEADERS = {
     "sleep_repair": "Tonight's sleep",
@@ -135,6 +147,9 @@ TRAINING_NOTE_SCHEMA = {
         "recommendation": {"type": "string", "enum": sorted(VALID_TRAINING_RECS)},
         "rationale": {"type": "string"},
         "context": {"type": "string"},
+        "session_type": {"type": "string", "enum": sorted(VALID_SESSION_TYPES)},
+        "duration_hours": {"type": "string", "enum": sorted(VALID_DURATION_HOURS)},
+        "intensity_guidance": {"type": "string"},
     },
 }
 
@@ -302,11 +317,12 @@ def _fallback_training_note(payload, state):
         rationale = "Markers look stable — normal training is fine if you feel ready."
     else:
         rationale = "A few markers are off baseline — easy day or rest if energy is low."
-    return {
+    note = {
         "recommendation": rec,
         "rationale": rationale,
         "context": tlc.get("pattern_note") or "",
     }
+    return apply_training_clearance(note, payload)
 
 
 class DigestGenerator:
@@ -552,7 +568,7 @@ class DigestGenerator:
             signal_areas={s["area"] for s in data["signals_today"]},
             finding_categories=finding_categories,
         )
-        data["training_note"] = cls._validate_training(data.get("training_note") or {})
+        data["training_note"] = cls._validate_training(data.get("training_note") or {}, payload)
         data["risk"] = cls._validate_risk(data.get("risk") or [], payload)
 
         cls._strip_invalid_hrv_wording(data, payload)
@@ -837,16 +853,9 @@ class DigestGenerator:
             return True
         return any(k in low for k in TECHNIQUE_HINTS)
 
-    @staticmethod
-    def _validate_training(note):
-        rec = note.get("recommendation")
-        if rec not in VALID_TRAINING_RECS:
-            rec = "easy_optional"
-        return {
-            "recommendation": rec,
-            "rationale": note.get("rationale", "") if isinstance(note.get("rationale"), str) else "",
-            "context": note.get("context", "") if isinstance(note.get("context"), str) else "",
-        }
+    @classmethod
+    def _validate_training(cls, note, payload=None):
+        return apply_training_clearance(note if isinstance(note, dict) else {}, payload or {})
 
     @classmethod
     def _validate_risk(cls, risks, payload=None):
@@ -1066,7 +1075,27 @@ class DigestGenerator:
         rationale = (note.get("rationale") or "").strip()
         if rationale and rationale[-1] not in ".!?":
             rationale = f"{rationale}."
-        line = f"{label} {rationale}".rstrip()
+
+        session_type = note.get("session_type")
+        duration = note.get("duration_hours")
+        guidance = (note.get("intensity_guidance") or "").strip()
+        prescription = ""
+        if session_type and session_type != "rest":
+            st_label = SESSION_TYPE_LABELS.get(session_type, session_type)
+            if duration:
+                dur_txt = duration.replace("-", "–")
+                prescription = f"{dur_txt}h {st_label}"
+            else:
+                prescription = st_label
+            if guidance:
+                prescription = f"{prescription} ({guidance})"
+
+        if prescription:
+            line = f"{label.rstrip('.')} — {prescription}."
+            if rationale:
+                line = f"{line} {rationale}"
+        else:
+            line = f"{label} {rationale}".rstrip()
         if note.get("context"):
             return f"{line}\n_{note['context']}_"
         return line

@@ -74,26 +74,62 @@ def safe_float(value):
     return float(value)
 
 
+_INTENSITY_RANK = {"easy": 0, "moderate": 1, "hard": 2, "very_hard": 3}
+
+
+def _tier_from_tss(tss: float, im: float) -> str:
+    if tss > 130:
+        return "very_hard"
+    if tss > 100:
+        return "hard"
+    if tss > 65 or im >= 45:
+        return "moderate"
+    return "easy"
+
+
+def _tier_from_suffer(suffer: float) -> str:
+    """Strava relative effort (`suffer_score`). Hard sessions need effort >= 100."""
+    if suffer >= 130:
+        return "very_hard"
+    if suffer >= 100:
+        return "hard"
+    if suffer >= 50:
+        return "moderate"
+    return "easy"
+
+
+def effective_intensity_tss(tss, suffer):
+    """
+    TSS for intensity labels and expected fatigue — not CTL/ATL.
+    Long steady aerobic work inflates power TSS; Strava relative effort caps it
+    when suffer is a meaningful reading (>= 50).
+    """
+    tss = safe_float(tss) or 0.0
+    suffer = safe_float(suffer) or 0.0
+    if tss <= 0:
+        return suffer
+    if suffer < 50:
+        return tss
+    return min(tss, suffer)
+
+
 def intensity_label(tss, suffer, intensity_minutes, trained):
     if not trained:
         return "rest"
     tss = safe_float(tss) or 0.0
     suffer = safe_float(suffer) or 0.0
     im = safe_float(intensity_minutes) or 0.0
-    if tss >= 100 or suffer >= 120:
-        return "very_hard"
-    if tss >= 70 or suffer >= 80:
-        return "hard"
-    if tss >= 40 or suffer >= 50 or im >= 45:
-        return "moderate"
-    return "easy"
+    if tss <= 0 and suffer > 0:
+        return _tier_from_suffer(suffer)
+    eff = effective_intensity_tss(tss, suffer)
+    tier = _tier_from_tss(eff, im)
+    if suffer <= 0 and im >= 45 and _INTENSITY_RANK.get(tier, 0) < _INTENSITY_RANK["moderate"]:
+        tier = "moderate"
+    return tier
 
 
 def is_hard_day(tss, suffer, intensity_minutes):
-    return (
-        (safe_float(tss) or 0) >= 80
-        or (safe_float(suffer) or 0) >= 80
-    )
+    return intensity_label(tss, suffer, intensity_minutes, True) in ("hard", "very_hard")
 
 
 def infer_tss_source(row):
@@ -737,10 +773,13 @@ def compute_health_state(payload, ctl_floor=30):
         or hrv_red
     )
     if red:
+        sleep_block = wellness.get("sleep_minutes") or {}
+        severe_short_sleep = sleep_block.get("magnitude") == "strong"
         if (
             ef_level in ("moderate", "high")
             and not illness_watch
             and not load_overreach
+            and not severe_short_sleep
         ):
             return "yellow"
         return "red"
@@ -795,6 +834,7 @@ def build_day_session(activities_df, intensity_minutes_df, day, stream_map=None,
     im = empty["intensity_minutes"]
     agg = grp.sort_values("tss_proxy", ascending=False).iloc[0]
     day_tss = 0.0
+    day_intensity_tss = 0.0
     max_suffer = 0.0
     day_streams = None
     for _, act_row in grp.iterrows():
@@ -802,8 +842,12 @@ def build_day_session(activities_df, intensity_minutes_df, day, stream_map=None,
         streams = stream_map.get(aid) if stream_map else None
         if streams and day_streams is None:
             day_streams = streams
-        day_tss += training_load.activity_tss_with_source(act_row, streams, ftp, threshold_hr)[0]
+        act_tss, _ = training_load.activity_tss_with_source(
+            act_row, streams, ftp, threshold_hr
+        )
         suffer = safe_float(act_row.get("suffer_score")) or 0.0
+        day_tss += act_tss
+        day_intensity_tss += effective_intensity_tss(act_tss, suffer)
         max_suffer = max(max_suffer, suffer)
 
     return {
@@ -812,9 +856,10 @@ def build_day_session(activities_df, intensity_minutes_df, day, stream_map=None,
         "name": agg.get("name"),
         "sport": agg.get("sport_type"),
         "tss": round(day_tss, 1),
+        "intensity_tss": round(day_intensity_tss, 1),
         "suffer_score": max_suffer or None,
         "intensity_minutes": im,
-        "intensity_label": intensity_label(day_tss, max_suffer, im, True),
+        "intensity_label": intensity_label(day_intensity_tss, max_suffer, im, True),
     }
 
 

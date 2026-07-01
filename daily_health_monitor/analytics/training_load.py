@@ -4,7 +4,12 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from analytics.digest_features import intensity_label, is_hard_day, safe_float
+from analytics.digest_features import (
+    effective_intensity_tss,
+    intensity_label,
+    is_hard_day,
+    safe_float,
+)
 
 
 def normalized_power(watts):
@@ -139,12 +144,13 @@ def _session_row(
         date_iso = local_date.isoformat()
     else:
         date_iso = str(local_date)[:10] if local_date else None
-    tss, _ = activity_tss_with_source(row, streams, ftp, threshold_hr)
+    tss, src = activity_tss_with_source(row, streams, ftp, threshold_hr)
     suffer = safe_float(row.get("suffer_score")) or 0.0
     im = 0.0
     if intensity_by_date and local_date in intensity_by_date:
         im = intensity_by_date[local_date]
     label = intensity_label(tss, suffer, im, True)
+    intensity_tss = effective_intensity_tss(tss, suffer)
     src = row.get("tss_source")
     if src is None or (isinstance(src, float) and pd.isna(src)):
         src = "cached" if tss else "none"
@@ -154,6 +160,8 @@ def _session_row(
         "sport": row.get("sport_type"),
         "intensity_label": label,
         "tss": round(tss, 1) if tss else None,
+        "intensity_tss": round(intensity_tss, 1) if intensity_tss else None,
+        "relative_effort": round(suffer, 1) if suffer else None,
         "tss_source": str(src),
     }
 
@@ -287,16 +295,16 @@ def compute_expected_fatigue(
     if not sess or source_days_ago is None:
         return empty
 
-    tss = safe_float(sess.get("tss")) or safe_float(two_days_ago_tss) or 0.0
+    tss_raw = safe_float(sess.get("tss")) or safe_float(two_days_ago_tss) or 0.0
+    suffer = safe_float(sess.get("suffer_score")) or 0.0
+    tss = effective_intensity_tss(tss_raw, suffer)
     im = safe_float(sess.get("intensity_minutes")) or 0.0
-    label = sess.get("intensity_label") or intensity_label(
-        tss, sess.get("suffer_score"), im, True
-    )
+    label = sess.get("intensity_label") or intensity_label(tss_raw, suffer, im, True)
     name = sess.get("name") or "session"
     sess_date = str(sess.get("date") or (target - timedelta(days=source_days_ago)).isoformat())[:10]
 
     hard = _session_was_hard(sess, tss, im)
-    moderate = label == "moderate" or (40 <= tss < 70)
+    moderate = label == "moderate" or (65 < tss <= 100)
     if not hard and not moderate:
         return empty
 
@@ -305,7 +313,7 @@ def compute_expected_fatigue(
         rhr_bump = 1.0
         proxy_dip = 0.15
     elif hard:
-        level = "high" if label == "very_hard" or tss >= 90 else "moderate"
+        level = "high" if label == "very_hard" or tss > 120 else "moderate"
         rhr_bump = 4.0 if level == "high" else 2.5
         proxy_dip = 0.6 if level == "high" else 0.35
     else:

@@ -13,7 +13,8 @@ def _sleep_df(nights, typical=420, target=None):
     target = target or date(2026, 6, 4)
     rows = []
     for i, mins in enumerate(nights):
-        d = target - timedelta(days=len(nights) - i)
+        # Garmin wake-date convention: last night is on `target`.
+        d = target - timedelta(days=len(nights) - 1 - i)
         rows.append(
             {
                 "date": d,
@@ -56,12 +57,45 @@ def test_sleep_debt_silent_when_last_night_good():
     assert not sleep_debt_should_surface(debt)
 
 
+def test_sleep_debt_wake_date_uses_target_row_for_last_night():
+    """Garmin stores last night on the wake-up date (digest `target`)."""
+    target = date(2026, 6, 24)
+    typical = 452
+    nights = [435, 492, 477, 420, 417, 468, 219]
+    debt = compute_sleep_debt(_sleep_df(nights, typical, target), target, typical)
+    assert debt["last_night_vs_norm_min"] == 219 - typical
+    assert debt["nights_short_7d"] >= 1
+    assert sleep_debt_should_surface(debt)
+
+
+def test_severe_short_sleep_finding():
+    from analytics.insight_detectors import _severe_short_sleep_finding
+
+    ctx = {
+        "today_wellness": {
+            "sleep_minutes": {
+                "today": 219,
+                "today_hm": "3h39m",
+                "baseline_hm": "7h32m",
+                "delta_pm": "-3h53m",
+                "magnitude": "strong",
+                "direction": "negative",
+                "confidence": "high",
+            }
+        }
+    }
+    f = _severe_short_sleep_finding(ctx)
+    assert f is not None
+    assert f.id == "severe_short_sleep"
+    assert f.salience >= 85
+
+
 def test_expected_fatigue_after_hard_day():
     yesterday = {
         "trained": True,
         "name": "Intense ride",
         "date": "2026-06-03",
-        "tss": 78,
+        "tss": 115,
         "intensity_label": "hard",
     }
     ef = training_load.compute_expected_fatigue(

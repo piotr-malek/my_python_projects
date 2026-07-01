@@ -99,6 +99,9 @@ def _finding_dict(f: Finding) -> Dict[str, Any]:
 
 def _daily_detectors(ctx) -> List[Finding]:
     out = []
+    f = _severe_short_sleep_finding(ctx)
+    if f:
+        out.append(f)
     f = _sleep_debt_finding(ctx)
     if f:
         out.append(f)
@@ -118,6 +121,37 @@ def _daily_detectors(ctx) -> List[Finding]:
         out.append(f)
     out.extend(_stress_daily_findings(ctx))
     return out
+
+
+def _severe_short_sleep_finding(ctx) -> Optional[Finding]:
+    """Last night far below norm — must outrank training-fatigue framing."""
+    tw = ctx.get("today_wellness") or {}
+    sleep = tw.get("sleep_minutes") or {}
+    if sleep.get("confidence") == "low":
+        return None
+    if sleep.get("magnitude") != "strong" or sleep.get("direction") != "negative":
+        return None
+    today_hm = sleep.get("today_hm") or format_minutes_hm(sleep.get("today"))
+    baseline_hm = sleep.get("baseline_hm") or format_minutes_hm(sleep.get("baseline"))
+    delta_pm = sleep.get("delta_pm") or ""
+    return Finding(
+        id="severe_short_sleep",
+        category="sleep",
+        salience=88,
+        confidence="high",
+        timeframe="last night",
+        summary=(
+            f"Last night was only {today_hm} vs your {baseline_hm} norm ({delta_pm}) — "
+            "a sharp shortfall that should shape today's plan regardless of training load."
+        ),
+        supporting={
+            "sleep_minutes": sleep.get("today"),
+            "delta_min": sleep.get("delta"),
+            "baseline_hm": baseline_hm,
+        },
+        suggested_theme="sleep_repair",
+        cadence="daily",
+    )
 
 
 def _sleep_debt_finding(ctx) -> Optional[Finding]:

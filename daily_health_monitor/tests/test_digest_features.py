@@ -19,14 +19,32 @@ def _wellness_with_delta(field, today_val, baseline_val):
 def test_intensity_label_tiers():
     assert digest_features.intensity_label(0, 0, 0, False) == "rest"
     assert digest_features.intensity_label(30, 30, 20, True) == "easy"
-    assert digest_features.intensity_label(50, 0, 0, True) == "moderate"
-    assert digest_features.intensity_label(85, 0, 0, True) == "hard"
-    assert digest_features.intensity_label(110, 0, 0, True) == "very_hard"
+    assert digest_features.intensity_label(50, 0, 0, True) == "easy"
+    assert digest_features.intensity_label(75, 0, 0, True) == "moderate"
+    assert digest_features.intensity_label(110, 0, 0, True) == "hard"
+    assert digest_features.intensity_label(140, 0, 0, True) == "very_hard"
+    # Power TSS inflated by duration; relative effort caps intensity.
+    assert digest_features.intensity_label(110, 73, 0, True) == "moderate"
+    assert digest_features.intensity_label(140, 73, 0, True) == "moderate"
+    assert digest_features.intensity_label(110, 105, 0, True) == "hard"
+    assert digest_features.intensity_label(140, 135, 0, True) == "very_hard"
+    # Low suffer readings (<50) do not cap power TSS.
+    assert digest_features.intensity_label(70, 40, 0, True) == "moderate"
+
+
+def test_effective_intensity_tss_caps_power_with_relative_effort():
+    assert digest_features.effective_intensity_tss(104, 73) == 73
+    assert digest_features.effective_intensity_tss(70, 40) == 70
+    assert digest_features.effective_intensity_tss(110, 0) == 110
+    assert digest_features.effective_intensity_tss(0, 73) == 73
 
 
 def test_is_hard_day_composite_rule():
-    assert digest_features.is_hard_day(80, 0, 0)
-    assert digest_features.is_hard_day(0, 90, 0)
+    assert not digest_features.is_hard_day(80, 0, 0)
+    assert digest_features.is_hard_day(105, 0, 0)
+    assert not digest_features.is_hard_day(105, 73, 0)
+    assert digest_features.is_hard_day(105, 110, 0)
+    assert digest_features.is_hard_day(0, 110, 0)
     assert not digest_features.is_hard_day(0, 0, 60)
     assert not digest_features.is_hard_day(50, 50, 30)
 
@@ -165,10 +183,10 @@ def test_build_last_7d_hard_day_count():
             "sport_type": "Ride",
             "local_date": target - timedelta(days=2),
             "moving_time": 3600,
-            "suffer_score": 95,
+            "suffer_score": 110,
             "avg_hr": 150,
             "weighted_avg_watts": 200,
-            "tss_proxy": 85,
+            "tss_proxy": 110,
             "tss_source": "power",
             "device_name": "Edge 530",
             "trainer": False,
@@ -190,10 +208,10 @@ def test_build_last_7d_hard_day_count():
     ]
     out = digest_features.build_last_7d(pd.DataFrame(rows), pd.DataFrame(), target)
     assert out["hard_day_count"] == 1
-    assert out["total_tss"] == 150.0
+    assert out["total_tss"] == 175.0
     assert out["total_minutes"] == 150.0
     assert out["total_minutes_hm"] == "2h30m"
-    assert out["weekly_tss_by_source"]["power"] == 150.0
+    assert out["weekly_tss_by_source"]["power"] == 175.0
     assert out["hardest_workout"]["name"] == "Threshold"
 
 
@@ -351,6 +369,28 @@ def test_compute_health_state_training_fatigue_downgrades_red_to_yellow():
     assert digest_features.compute_health_state(payload) == "yellow"
 
 
+def test_compute_health_state_severe_sleep_not_downgraded_by_training():
+    payload = {
+        "today_wellness": {
+            "rhr_bpm": {"magnitude": "significant", "delta": 3, "confidence": "high"},
+            "hrv_proxy_nocturnal": {"magnitude": "significant", "delta": -5, "confidence": "high"},
+            "sleep_minutes": {"magnitude": "strong", "direction": "negative", "confidence": "high"},
+        },
+        "load": {"load_ratio": 1.0, "ctl": 40},
+        "garmin_status": {"hrv_status": "low"},
+        "patterns": [],
+        "last_7d": {"days_since_rest": 1},
+        "training_load_context": {
+            "expected_fatigue_today": {
+                "level": "high",
+                "expected_rhr_bump": 4.0,
+                "source_session": "Lunch Ride 2026-06-23",
+            }
+        },
+    }
+    assert digest_features.compute_health_state(payload) == "red"
+
+
 def test_magnitude_after_training_adjustment_rhr_within_bump():
     block = {"magnitude": "significant", "delta": 4}
     ef = {"level": "moderate", "expected_rhr_bump": 2.5}
@@ -368,6 +408,14 @@ def test_patterns_skip_pre_illness_during_expected_fatigue():
     assert not any(p["id"] == "pre_illness_signal" for p in patterns)
 
 
+def test_lunch_ride_moderate_with_power_tss_above_relative_effort():
+    """Long aerobic ride: power TSS ~104 but Strava relative effort 73 → moderate."""
+    label = digest_features.intensity_label(103.9, 73, 0, True)
+    assert label == "moderate"
+    assert not digest_features.is_hard_day(103.9, 73, 0)
+    assert digest_features.effective_intensity_tss(103.9, 73) == 73
+
+
 def test_build_yesterday_uses_calendar_day_not_last_workout():
     target = date(2026, 5, 25)
     yesterday = target - timedelta(days=1)
@@ -379,7 +427,7 @@ def test_build_yesterday_uses_calendar_day_not_last_workout():
                 "sport_type": "Ride",
                 "local_date": yesterday,
                 "moving_time": 5400,
-                "tss_proxy": 65,
+                "tss_proxy": 70,
                 "suffer_score": 40,
             },
             {
@@ -397,4 +445,4 @@ def test_build_yesterday_uses_calendar_day_not_last_workout():
     assert out["trained"] is True
     assert out["name"] == "Endurance"
     assert out["intensity_label"] == "moderate"
-    assert out["tss"] == 65.0
+    assert out["tss"] == 70.0
