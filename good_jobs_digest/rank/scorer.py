@@ -1,28 +1,20 @@
-"""Ollama structured scoring for job rows (parallel + optional multi-job batches)."""
+"""Gemini structured scoring for job rows (parallel + optional multi-job batches)."""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Iterator
 
-import ollama
 from pydantic import ValidationError
 
 from config import Settings
 from normalize.schema import JobScorePayload
-from profile.preferences import load_preferences
-from rank.location_constraints import (
-    apply_location_guard,
-    format_location_constraints_for_prompt,
-    location_constraints_from_job,
-    location_policy_from_prefs,
-)
+from rank.llm import BudgetExhausted, GeminiClient
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +25,10 @@ SCORE_JSON_SCHEMA: dict[str, Any] = {
         "mission_alignment",
         "candidate_fit",
         "remote_ok",
+        "eu_hire_ok",
+        "timezone_ok",
+        "seniority_ok",
+        "fit_reasons",
         "extracted_salary",
         "top_requirements",
         "risks_or_gaps",
@@ -43,7 +39,13 @@ SCORE_JSON_SCHEMA: dict[str, Any] = {
         "mission_alignment": {"type": "integer", "minimum": 0, "maximum": 100},
         "candidate_fit": {"type": "integer", "minimum": 0, "maximum": 100},
         "remote_ok": {"type": "boolean"},
-        "extracted_salary": {"type": ["string", "null"]},
+        "eu_hire_ok": {"type": "boolean"},
+        "timezone_ok": {"type": "boolean"},
+        "seniority_ok": {"type": "boolean"},
+        "fit_reasons": {"type": "array", "items": {"type": "string"}},
+        # Gemini's response_schema takes a single type plus `nullable`; a JSON-Schema
+        # union like ["string", "null"] is rejected outright.
+        "extracted_salary": {"type": "string", "nullable": True},
         "top_requirements": {"type": "array", "items": {"type": "string"}},
         "risks_or_gaps": {"type": "array", "items": {"type": "string"}},
         "one_line_summary": {"type": "string"},
@@ -61,9 +63,6 @@ BATCH_SCORE_JSON_SCHEMA: dict[str, Any] = {
         }
     },
 }
-
-_thread_local = threading.local()
-
 
 def _extract_json_object(text: str) -> str:
     if not text:
@@ -102,76 +101,48 @@ def _truncate_desc(text: str, limit: int) -> str:
 
 
 class JobScorer:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, llm: GeminiClient | None = None):
         self._settings = settings
-        self._desc_limit = int(getattr(settings, "OLLAMA_DESC_TRUNCATE", 2000) or 2000)
+        self._desc_limit = int(getattr(settings, "LLM_DESC_TRUNCATE", 2000) or 2000)
         prompts = Path(__file__).parent / "prompts"
         self._template = (prompts / "score_job.txt").read_text(encoding="utf-8")
         self._batch_template = (prompts / "score_jobs_batch.txt").read_text(encoding="utf-8")
-        prefs_path = getattr(settings, "PREFERENCES_PATH", None)
-        prefs = load_preferences(prefs_path) if prefs_path else {}
-        self._location_policy = location_policy_from_prefs(prefs)
+        self._llm = llm or GeminiClient(settings)
+        self.budget_exhausted = False
 
-    def _location_block(self, row: dict[str, Any]) -> str:
-        constraints = location_constraints_from_job(row, policy=self._location_policy)
-        return format_location_constraints_for_prompt(
-            constraints,
-            acceptable_hire_regions=self._location_policy.acceptable_hire_regions or None,
-            allow_unspecified_location=self._location_policy.allow_unspecified_location,
-        )
-
-    def _guard_payload(self, row: dict[str, Any], payload: JobScorePayload) -> JobScorePayload:
-        constraints = location_constraints_from_job(row, policy=self._location_policy)
-        return apply_location_guard(payload, constraints, policy=self._location_policy)
-
-    def _client(self) -> ollama.Client:
-        client = getattr(_thread_local, "client", None)
-        if client is None:
-            client = ollama.Client(host=self._settings.OLLAMA_HOST)
-            _thread_local.client = client
-        return client
-
-    def _generate_options(self, *, temperature: float, num_predict: int | None = None) -> dict[str, Any]:
-        return {
-            "temperature": temperature,
-            "num_predict": num_predict if num_predict is not None else self._settings.OLLAMA_NUM_PREDICT,
-            "num_ctx": 8192,
-            "top_p": 0.9,
-        }
-
-    def _num_predict_for_batch(self, n_jobs: int) -> int:
+    def _max_tokens_for_batch(self, n_jobs: int) -> int:
         """Batch JSON needs more tokens than a single score object."""
-        base = self._settings.OLLAMA_NUM_PREDICT
+        base = int(getattr(self._settings, "GEMINI_MAX_OUTPUT_TOKENS", 4096))
         if n_jobs <= 1:
             return base
-        return max(base, min(8192, 320 * n_jobs + 512))
+        return max(base, min(16384, 700 * n_jobs + 512))
 
-    def _call_ollama(
+    def _call_llm(
         self,
         *,
         prompt: str,
         schema: dict[str, Any],
         temperatures: tuple[float, ...] = (0.15, 0.0),
-        num_predict: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> dict[str, Any] | None:
-        client = self._client()
+        if self.budget_exhausted:
+            return None
         for attempt, temp in enumerate(temperatures):
             try:
-                response = client.generate(
-                    model=self._settings.OLLAMA_MODEL,
-                    prompt=prompt,
-                    format=schema,
-                    keep_alive=self._settings.OLLAMA_KEEP_ALIVE,
-                    options=self._generate_options(temperature=temp, num_predict=num_predict),
+                raw = self._llm.generate_json(
+                    prompt,
+                    schema=schema,
+                    temperature=temp,
+                    max_output_tokens=max_output_tokens,
                 )
-                raw_text = response.get("response") or ""
-                return _loads_json_response(raw_text)
-            except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                logger.info("score attempt %s failed: %s", attempt + 1, exc)
-                continue
-            except Exception as exc:
-                logger.warning("ollama error: %s", exc)
-                break
+            except BudgetExhausted as exc:
+                # Stop the whole run cleanly; unscored jobs are retried tomorrow.
+                logger.warning("Gemini daily budget spent (%s) — leaving rest unscored", exc)
+                self.budget_exhausted = True
+                return None
+            if raw is not None:
+                return raw
+            logger.info("score attempt %s produced no JSON", attempt + 1)
         return None
 
     def _build_single_prompt(self, row: dict[str, Any], scoring_input: str) -> str:
@@ -181,7 +152,6 @@ class JobScorer:
             mission_category=row.get("mission_category") or "",
             title=row.get("title") or "",
             location_text=row.get("location_text") or "",
-            location_analysis=self._location_block(row),
             is_remote=bool(row.get("is_remote")),
             salary_text=row.get("salary_text") or "",
             target_keywords=", ".join(self._settings.TARGET_ROLE_KEYWORDS),
@@ -199,7 +169,6 @@ class JobScorer:
                 f"- Title: {row.get('title') or ''}\n"
                 f"- Location: {row.get('location_text') or ''}\n"
                 f"- Heuristic remote flag (may be wrong): {bool(row.get('is_remote'))}\n"
-                f"- Detected location constraints:\n{self._location_block(row)}\n"
                 f"- Salary hint: {row.get('salary_text') or ''}\n"
                 f"Description:\n{_truncate_desc(row.get('description_text'), per_job_limit)}\n"
             )
@@ -210,14 +179,14 @@ class JobScorer:
         )
 
     def score_job(self, row: dict[str, Any], scoring_input: str) -> JobScorePayload | None:
-        raw = self._call_ollama(
+        raw = self._call_llm(
             prompt=self._build_single_prompt(row, scoring_input),
             schema=SCORE_JSON_SCHEMA,
         )
         if raw is None:
             return None
         try:
-            return self._guard_payload(row, JobScorePayload.model_validate(raw))
+            return JobScorePayload.model_validate(raw)
         except ValidationError:
             return None
 
@@ -230,10 +199,10 @@ class JobScorer:
             jid = int(rows[0]["id"])
             return [(jid, self.score_job(rows[0], scoring_input))]
 
-        raw = self._call_ollama(
+        raw = self._call_llm(
             prompt=self._build_batch_prompt(rows, scoring_input),
             schema=BATCH_SCORE_JSON_SCHEMA,
-            num_predict=self._num_predict_for_batch(len(rows)),
+            max_output_tokens=self._max_tokens_for_batch(len(rows)),
         )
         if raw is None:
             if len(rows) > 1:
@@ -260,7 +229,7 @@ class JobScorer:
                 out.append((jid, None))
                 continue
             try:
-                out.append((jid, self._guard_payload(row, JobScorePayload.model_validate(scores_raw[i]))))
+                out.append((jid, JobScorePayload.model_validate(scores_raw[i])))
             except ValidationError:
                 out.append((jid, self.score_job(row, scoring_input)))
         return out
@@ -274,8 +243,8 @@ class JobScorer:
         if not rows:
             return
 
-        batch_size = max(1, self._settings.OLLAMA_SCORE_BATCH_SIZE)
-        workers = max(1, self._settings.OLLAMA_SCORE_WORKERS)
+        batch_size = max(1, self._settings.LLM_SCORE_BATCH_SIZE)
+        workers = max(1, self._settings.LLM_SCORE_WORKERS)
         chunks: list[list[dict[str, Any]]] = []
         for i in range(0, len(rows), batch_size):
             chunks.append(rows[i : i + batch_size])

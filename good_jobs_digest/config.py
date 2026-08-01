@@ -28,15 +28,30 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 class Settings:
     def __init__(self):
-        self.OLLAMA_HOST = _env("OLLAMA_HOST", "http://localhost:11434")
-        self.OLLAMA_MODEL = _env("OLLAMA_MODEL", "qwen3:14b-q4_K_M")
-        self.OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "512"))
-        self.OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
-        self.OLLAMA_SCORE_WORKERS = max(1, int(os.getenv("OLLAMA_SCORE_WORKERS", "2")))
-        self.OLLAMA_SCORE_BATCH_SIZE = max(1, int(os.getenv("OLLAMA_SCORE_BATCH_SIZE", "4")))
-        self.OLLAMA_DESC_TRUNCATE = int(os.getenv("OLLAMA_DESC_TRUNCATE", "2000"))
-        self.OLLAMA_MISSION_BATCH_SIZE = max(1, int(os.getenv("OLLAMA_MISSION_BATCH_SIZE", "8")))
-        self.OLLAMA_MISSION_WORKERS = max(1, int(os.getenv("OLLAMA_MISSION_WORKERS", "2")))
+        # Gemini Flash (AI Studio). Use a key from a project with billing DISABLED:
+        # over-quota calls then return 429 and can never be charged.
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        self.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+        # Tried in order if GEMINI_MODEL is retired (Google 404s old ids without notice).
+        self.GEMINI_MODEL_FALLBACKS = tuple(
+            m.strip()
+            for m in os.getenv(
+                "GEMINI_MODEL_FALLBACKS", "gemini-flash-lite-latest,gemini-2.5-flash"
+            ).split(",")
+            if m.strip()
+        )
+        self.GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
+        self.GEMINI_MAX_RETRIES = max(1, int(os.getenv("GEMINI_MAX_RETRIES", "3")))
+        # Free-tier guardrails: requests/minute and a persisted requests/day cap.
+        self.GEMINI_RPM = int(os.getenv("GEMINI_RPM", "8"))
+        self.GEMINI_DAILY_REQUEST_BUDGET = int(os.getenv("GEMINI_DAILY_REQUEST_BUDGET", "300"))
+        self.GEMINI_USAGE_PATH = (ROOT / "data" / "gemini_usage.json").resolve()
+        # Batching keeps the request count (and therefore the free-tier usage) low.
+        self.LLM_SCORE_WORKERS = max(1, int(os.getenv("LLM_SCORE_WORKERS", "2")))
+        self.LLM_SCORE_BATCH_SIZE = max(1, int(os.getenv("LLM_SCORE_BATCH_SIZE", "5")))
+        self.LLM_DESC_TRUNCATE = int(os.getenv("LLM_DESC_TRUNCATE", "2000"))
+        self.LLM_MISSION_BATCH_SIZE = max(1, int(os.getenv("LLM_MISSION_BATCH_SIZE", "10")))
+        self.LLM_MISSION_WORKERS = max(1, int(os.getenv("LLM_MISSION_WORKERS", "2")))
         # Auto-approve curated employers at or above this mission_score (liberal default).
         self.MISSION_APPROVE_MIN_SCORE = max(0, min(100, int(os.getenv("MISSION_APPROVE_MIN_SCORE", "50"))))
         self.REGISTRY_LLM_FILTER = _env_bool("REGISTRY_LLM_FILTER", True)
@@ -44,6 +59,9 @@ class Settings:
         self.SCORE_MAX_AGE_DAYS = int(os.getenv("SCORE_MAX_AGE_DAYS", "30"))  # 0 = no age filter
         # Digest cutoff; 0 = include all scored jobs. Set >0 to filter weak matches from email.
         self.MIN_COMBINED_SCORE = float(os.getenv("MIN_COMBINED_SCORE", "0"))
+        # Digest floor on the LLM candidate_fit score (fit_score column); 0 = disabled.
+        self.MIN_CANDIDATE_FIT = float(os.getenv("MIN_CANDIDATE_FIT", "40"))
+        # Max jobs per digest section (curated / boards); 0 = unlimited.
         self.DIGEST_TOP_N = int(os.getenv("DIGEST_TOP_N", "50"))
         self.DIGEST_REMOTE_ONLY = _env_bool("DIGEST_REMOTE_ONLY", True)
         self.SMTP_HOST = _env("SMTP_HOST", "smtp.gmail.com")
@@ -58,13 +76,17 @@ class Settings:
         ).resolve()
         self.INGEST_DELAY_MS = int(os.getenv("INGEST_DELAY_MS", "150"))
         self.INGEST_WORKERS = max(1, int(os.getenv("INGEST_WORKERS", "10")))
+        # Poll 1/N of curated employers per ingest (stalest first). 1 = poll all every run.
+        self.CURATED_POLL_ROTATION_DIVISOR = max(
+            1, int(os.getenv("CURATED_POLL_ROTATION_DIVISOR", "1"))
+        )
         self.SMARTRECRUITERS_API_KEY = os.getenv("SMARTRECRUITERS_API_KEY") or ""
         self.TARGET_ROLE_KEYWORDS = [
             k.strip().lower()
             for k in os.getenv(
                 "TARGET_ROLE_KEYWORDS",
                 "artificial intelligence engineer,analytics engineer,analytics engineering,"
-                "ai engineer,machine learning engineer,ml engineer,data engineer,data engineering,"
+                "ai engineer,data engineer,data engineering,"
                 "data integration,data integrations,data platform engineer,etl engineer",
             ).split(",")
             if k.strip()
@@ -73,7 +95,25 @@ class Settings:
             k.strip().lower()
             for k in os.getenv(
                 "EXCLUDE_TITLE_KEYWORDS",
-                "intern,internship",
+                "intern,internship,software engineer,software developer,"
+                "frontend engineer,front-end engineer,backend engineer,back-end engineer,"
+                "full stack,fullstack,devops,site reliability,sre,"
+                "mobile engineer,ios engineer,android engineer,qa engineer,quality engineer,"
+                "security engineer,sales engineer,product engineer,"
+                "mechanical engineer,civil engineer,field engineer,manufacturing engineer,"
+                "customer success,account executive,recruiter,marketing manager,"
+                "machine learning,ml engineer,mlops",
+            ).split(",")
+            if k.strip()
+        ]
+        # Title-level seniority gate (word-boundary match). Drops levels outside the
+        # target (see profile/preferences.yaml seniority); empty string disables.
+        self.SENIORITY_EXCLUDE_KEYWORDS = [
+            k.strip().lower()
+            for k in os.getenv(
+                "SENIORITY_EXCLUDE_KEYWORDS",
+                "senior,staff,principal,lead,head,director,vp,chief,manager,"
+                "graduate,working student,trainee",
             ).split(",")
             if k.strip()
         ]
@@ -91,6 +131,14 @@ class Settings:
         self.BQ_BATCH_LLM_SCORES = _env_bool("BQ_BATCH_LLM_SCORES", True)
         self.BQ_BATCH_CHUNK_SIZE = int(os.getenv("BQ_BATCH_CHUNK_SIZE", "50"))
         self.BQ_RAW_BATCH_SIZE = int(os.getenv("BQ_RAW_BATCH_SIZE", "50"))
+        # The BigQuery client waits forever by default; a dropped socket would hang
+        # an unattended run. 0 disables the timeout.
+        self.BQ_JOB_TIMEOUT_SECONDS = float(os.getenv("BQ_JOB_TIMEOUT_SECONDS", "120"))
+        # Daily pipeline: read curated_companies + batch-load jobs_normalized (no streaming inserts).
+        self.BQ_WRITE_JOBS = _env_bool("BQ_WRITE_JOBS", True)
+        self.BQ_WRITE_RAW_PAYLOADS = _env_bool("BQ_WRITE_RAW_PAYLOADS", False)
+        self.BQ_WRITE_LLM_SCORES = _env_bool("BQ_WRITE_LLM_SCORES", False)
+        self.BQ_WRITE_DIGEST_HISTORY = _env_bool("BQ_WRITE_DIGEST_HISTORY", False)
         self.GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or ""
         # Mission job boards (Climatebase, 80k Hours, etc.)
         self.JOB_BOARDS_ENABLED = _env_bool("JOB_BOARDS_ENABLED", True)
@@ -101,14 +149,62 @@ class Settings:
             ROOT / os.getenv("WEBSHARE_PROXIES_PATH", "config/webshare_proxies.txt")
         ).resolve()
         self.WEBSHARE_PROXY_LIST_URL = os.getenv("WEBSHARE_PROXY_LIST_URL") or ""
+        # Preferred over the download URL: the API reports which proxies are still
+        # valid, and the key isn't embedded in a shareable URL.
+        self.WEBSHARE_API_KEY = os.getenv("WEBSHARE_API_KEY") or ""
+        # Free Webshare proxies get rotated without notice, so the cached list is
+        # re-downloaded once it is older than this. 0 = refresh on every run.
+        self.WEBSHARE_PROXY_MAX_AGE_HOURS = float(
+            os.getenv("WEBSHARE_PROXY_MAX_AGE_HOURS", "12")
+        )
         self.CLIMATEBASE_MAX_LISTINGS = int(os.getenv("CLIMATEBASE_MAX_LISTINGS", "100"))
         self.CLIMATEBASE_FETCH_DETAILS = _env_bool("CLIMATEBASE_FETCH_DETAILS", True)
         self.BOARD_80000HOURS_MAX_PAGES = int(os.getenv("BOARD_80000HOURS_MAX_PAGES", "3"))
         self.BOARD_ESCAPETHECITY_MAX_PAGES = int(os.getenv("BOARD_ESCAPETHECITY_MAX_PAGES", "3"))
         self.TJFG_FETCH_DETAILS = _env_bool("TJFG_FETCH_DETAILS", True)
-        self.RELIEFWEB_ENABLED = _env_bool("RELIEFWEB_ENABLED", True)
+        # ReliefWeb needs an approved appname we never obtained — off unless re-enabled.
+        self.RELIEFWEB_ENABLED = _env_bool("RELIEFWEB_ENABLED", False)
         self.RELIEFWEB_APPNAME = (os.getenv("RELIEFWEB_APPNAME") or "").strip()
         self.RELIEFWEB_JOBS_LIMIT = int(os.getenv("RELIEFWEB_JOBS_LIMIT", "200"))
+        # Zero-yield HTML scrapers — off by default (Phase 3 board repairs).
+        self.BOARD_IDEALIST_ENABLED = _env_bool("BOARD_IDEALIST_ENABLED", False)
+        self.BOARD_IMPACTPOOL_ENABLED = _env_bool("BOARD_IMPACTPOOL_ENABLED", False)
+        self.BOARD_AAC_ENABLED = _env_bool("BOARD_AAC_ENABLED", False)
+        self.BOARD_WORKONCLIMATE_ENABLED = _env_bool("BOARD_WORKONCLIMATE_ENABLED", False)
+        # New API boards (Phase 3).
+        self.BOARD_REMOTIVE_ENABLED = _env_bool("BOARD_REMOTIVE_ENABLED", True)
+        self.BOARD_ARBEITNOW_ENABLED = _env_bool("BOARD_ARBEITNOW_ENABLED", True)
+        self.BOARD_JOBICY_ENABLED = _env_bool("BOARD_JOBICY_ENABLED", True)
+        self.BOARD_HIMALAYAS_ENABLED = _env_bool("BOARD_HIMALAYAS_ENABLED", True)
+        self.BOARD_ARBEITNOW_MAX_PAGES = int(os.getenv("BOARD_ARBEITNOW_MAX_PAGES", "5"))
+        self.BOARD_JOBICY_COUNT = int(os.getenv("BOARD_JOBICY_COUNT", "50"))
+        self.BOARD_JOBICY_GEO = os.getenv("BOARD_JOBICY_GEO", "emea")
+        self.BOARD_HIMALAYAS_LIMIT = int(os.getenv("BOARD_HIMALAYAS_LIMIT", "200"))
+        self.BOARD_REMOTEOK_ENABLED = _env_bool("BOARD_REMOTEOK_ENABLED", True)
+        self.BOARD_WEWORKREMOTELY_ENABLED = _env_bool("BOARD_WEWORKREMOTELY_ENABLED", True)
+        self.BOARD_WORKINGNOMADS_ENABLED = _env_bool("BOARD_WORKINGNOMADS_ENABLED", True)
+        self.BOARD_HN_ENABLED = _env_bool("BOARD_HN_ENABLED", True)
+        self.BOARD_HN_MAX_COMMENTS = int(os.getenv("BOARD_HN_MAX_COMMENTS", "400"))
+        # Indeed via python-jobspy (optional dependency: pip install python-jobspy)
+        self.BOARD_INDEED_ENABLED = _env_bool("BOARD_INDEED_ENABLED", True)
+        self.INDEED_COUNTRIES = tuple(
+            c.strip()
+            for c in os.getenv(
+                "INDEED_COUNTRIES", "Germany,Netherlands,Poland,Ireland,Spain"
+            ).split(",")
+            if c.strip()
+        )
+        self.INDEED_SEARCH_TERMS = tuple(
+            t.strip()
+            for t in os.getenv(
+                "INDEED_SEARCH_TERMS",
+                "data engineer,analytics engineer,data platform engineer",
+            ).split(",")
+            if t.strip()
+        )
+        self.INDEED_RESULTS_WANTED = int(os.getenv("INDEED_RESULTS_WANTED", "25"))
+        # Employer mission gate for board-sourced jobs (cached per employer).
+        self.EMPLOYER_MISSION_GATE_ENABLED = _env_bool("EMPLOYER_MISSION_GATE_ENABLED", True)
 
     def combined_weighted(self, role: float, mission: float, fit: float) -> float:
         return 0.4 * role + 0.35 * mission + 0.25 * fit

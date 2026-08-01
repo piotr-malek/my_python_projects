@@ -6,13 +6,8 @@ from dataclasses import dataclass
 
 import httpx
 
-from discovery.resolve import (
-    _greenhouse_board,
-    _lever_board,
-    _smartrecruiters_board,
-    employer_names_align,
-    slug_aligns_with_company,
-)
+from discovery.ats_registry import CURATED_ATS_TYPES, probe_board
+from discovery.resolve import employer_names_align, slug_aligns_with_company
 
 
 @dataclass
@@ -34,7 +29,6 @@ class ValidationResult:
 
 
 def _identity_ok(company_name: str, ats_slug: str, board_name: str) -> tuple[bool, bool]:
-    """Return (name_ok, slug_ok)."""
     slug_ok = slug_aligns_with_company(ats_slug, company_name)
     name_ok = bool(board_name) and employer_names_align(company_name, board_name)
     return name_ok, slug_ok
@@ -66,25 +60,21 @@ def validate_registry_entry(
         base.reason = "placeholder slug"
         return base
 
+    if ats not in CURATED_ATS_TYPES:
+        base.reason = f"unknown ats_type {ats}"
+        return base
+
     board_name = ""
     try:
-        if ats == "greenhouse":
-            has_jobs, board_name = _greenhouse_board(client, slug)
-            base.http_ok = has_jobs
-            base.has_postings = has_jobs
-        elif ats == "smartrecruiters":
-            has_jobs, board_name = _smartrecruiters_board(client, slug)
-            base.http_ok = has_jobs
-            base.has_postings = has_jobs
-        elif ats == "lever":
-            has_jobs, board_name = _lever_board(client, slug, region=ats_region)
-            if not has_jobs and ats_region != "eu":
-                has_jobs, board_name = _lever_board(client, slug, region="eu")
-            base.http_ok = has_jobs
-            base.has_postings = has_jobs
+        if ats == "lever" and ats_region != "eu":
+            result = probe_board(client, ats, slug, region="global")
+            if not result.has_jobs:
+                result = probe_board(client, ats, slug, region="eu")
         else:
-            base.reason = f"unknown ats_type {ats}"
-            return base
+            result = probe_board(client, ats, slug, region=ats_region)
+        base.http_ok = result.has_jobs
+        base.has_postings = result.has_jobs
+        board_name = result.board_name
     except httpx.RequestError as exc:
         base.reason = str(exc)
         return base
@@ -96,7 +86,7 @@ def validate_registry_entry(
     base.name_ok, base.slug_ok = _identity_ok(company_name, slug, board_name)
     base.board_name = board_name
 
-    if require_identity and ats in ("lever", "smartrecruiters") and not board_name:
+    if require_identity and ats in ("lever", "smartrecruiters", "workday", "personio") and not board_name:
         if not base.slug_ok:
             base.reason = f"slug mismatch (slug {slug!r} vs {company_name!r})"
             return base

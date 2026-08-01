@@ -3,23 +3,24 @@
 from __future__ import annotations
 
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
-ATS_ORDER = ("greenhouse", "smartrecruiters", "lever")
+from discovery.ats_registry import (
+    ATS_PROBE_ORDER,
+    careers_url as _careers_url,
+    parse_ats_from_text,
+    probe_batches_for,
+    probe_board,
+)
 
-_GREENHOUSE_RE = re.compile(
-    r"(?:boards(?:-api)?\.greenhouse\.io|job-boards\.greenhouse\.io)/([^/?#\s\"']+)",
-    re.I,
-)
-_LEVER_RE = re.compile(r"jobs\.lever\.co/([^/?#\s\"']+)", re.I)
-_SMARTRECRUITERS_RE = re.compile(
-    r"(?:careers\.smartrecruiters\.com|api\.smartrecruiters\.com/v1/companies)/([^/?#\s\"']+)",
-    re.I,
-)
+# Backward-compatible alias
+ATS_ORDER = ATS_PROBE_ORDER
 
 _SUFFIXES = (
     " inc",
@@ -62,23 +63,6 @@ class AtsMatch:
     careers_url: str = ""
     validated: bool = True
     board_display_name: str = ""
-
-
-def parse_ats_from_text(text: str) -> tuple[str, str] | None:
-    """Return (ats_type, slug) from a URL or HTML blob."""
-    if not text:
-        return None
-    for pattern, ats in (
-        (_GREENHOUSE_RE, "greenhouse"),
-        (_SMARTRECRUITERS_RE, "smartrecruiters"),
-        (_LEVER_RE, "lever"),
-    ):
-        m = pattern.search(text)
-        if m:
-            slug = m.group(1).split("/")[0].strip()
-            if slug:
-                return ats, slug
-    return None
 
 
 def slug_candidates(
@@ -145,7 +129,7 @@ def _name_tokens(text: str) -> set[str]:
         if len(t) >= 3:
             out.add(t)
         elif len(t) >= 2 and any(c.isdigit() for c in t):
-            out.add(t)  # e.g. 2U
+            out.add(t)
     return out
 
 
@@ -186,10 +170,8 @@ _GENERIC_TOKENS = frozenset(
         "centre",
         "management",
         "policies",
-        "institute",
         "forum",
         "giving",
-        "policies",
         "building",
         "intelligence",
         "solutions",
@@ -246,73 +228,8 @@ def employer_names_align(company_name: str, board_name: str) -> bool:
     return False
 
 
-def careers_url(ats_type: str, slug: str) -> str:
-    if ats_type == "greenhouse":
-        return f"https://boards.greenhouse.io/{slug}"
-    if ats_type == "lever":
-        return f"https://jobs.lever.co/{slug}"
-    if ats_type == "smartrecruiters":
-        return f"https://careers.smartrecruiters.com/{slug}"
-    return ""
-
-
-def _greenhouse_board(client: httpx.Client, slug: str) -> tuple[bool, str]:
-    """Return (has_open_jobs, board_display_name)."""
-    jobs_url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=false"
-    try:
-        r = client.get(jobs_url)
-    except httpx.RequestError:
-        return False, ""
-    if r.status_code != 200:
-        return False, ""
-    jobs = r.json().get("jobs")
-    if not isinstance(jobs, list) or len(jobs) == 0:
-        return False, ""
-    meta_url = f"https://boards-api.greenhouse.io/v1/boards/{slug}"
-    try:
-        meta = client.get(meta_url)
-    except httpx.RequestError:
-        meta = None
-    board_name = ""
-    if meta and meta.status_code == 200:
-        board_name = str(meta.json().get("name") or "")
-    return True, board_name
-
-
-def _smartrecruiters_board(client: httpx.Client, slug: str) -> tuple[bool, str]:
-    url = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=1"
-    try:
-        r = client.get(url)
-    except httpx.RequestError:
-        return False, ""
-    if r.status_code != 200:
-        return False, ""
-    if int(r.json().get("totalFound") or 0) <= 0:
-        return False, ""
-    try:
-        ident = client.get(f"https://api.smartrecruiters.com/v1/companies/{slug}")
-    except httpx.RequestError:
-        ident = None
-    name = ""
-    if ident and ident.status_code == 200:
-        name = str(ident.json().get("name") or "")
-    return True, name
-
-
-def _lever_board(client: httpx.Client, slug: str, *, region: str = "global") -> tuple[bool, str]:
-    base = "https://api.eu.lever.co" if region == "eu" else "https://api.lever.co"
-    url = f"{base}/v0/postings/{slug}?mode=json&limit=1"
-    try:
-        r = client.get(url)
-    except httpx.RequestError:
-        return False, ""
-    if r.status_code != 200:
-        return False, ""
-    data = r.json()
-    if not isinstance(data, list) or len(data) == 0:
-        return False, ""
-    # Lever postings API does not expose employer display name — identity is checked via slug.
-    return True, ""
+def careers_url(ats_type: str, slug: str, *, region: str = "global") -> str:
+    return _careers_url(ats_type, slug, region=region)
 
 
 def probe_slug(
@@ -323,8 +240,12 @@ def probe_slug(
     prefer_ats: str | None = None,
     try_eu_lever: bool = False,
     require_name_match: bool = True,
+    parallel_ats: bool = True,
+    skip_ats: frozenset[str] | None = None,
+    only_ats: frozenset[str] | None = None,
+    batch_ats: bool = False,
 ) -> AtsMatch | None:
-    """Probe Greenhouse → SmartRecruiters → Lever for one slug; stop at first hit."""
+    """Probe ATS types for one slug; stop at first acceptable hit."""
 
     def _accept(board_name: str, ats: str, *, from_url_hint: bool) -> bool:
         if not require_name_match or not company_name:
@@ -339,49 +260,116 @@ def probe_slug(
             return False
         return name_ok or slug_ok
 
+    def _match_from_result(ats: str, result: Any, *, region: str = "global") -> AtsMatch | None:
+        if not result.has_jobs:
+            return None
+        if not _accept(
+            result.board_name,
+            ats,
+            from_url_hint=from_url_hint and ats == prefer_ats,
+        ):
+            return None
+        if ats == "lever":
+            return AtsMatch(
+                ats_type="lever",
+                ats_slug=slug,
+                ats_region=region,
+                careers_url=careers_url("lever", slug, region=region),
+                board_display_name=result.board_name,
+            )
+        return AtsMatch(
+            ats_type=ats,
+            ats_slug=slug,
+            careers_url=careers_url(ats, slug),
+            board_display_name=result.board_name,
+        )
+
     from_url_hint = bool(prefer_ats)
-    order = list(ATS_ORDER)
+    order = list(ATS_PROBE_ORDER)
+    if only_ats:
+        order = [a for a in order if a in only_ats]
+    if skip_ats:
+        order = [a for a in order if a not in skip_ats]
     if prefer_ats and prefer_ats in order:
         order = [prefer_ats] + [a for a in order if a != prefer_ats]
+    if not order:
+        return None
+
+    def _probe_one(ats: str) -> AtsMatch | None:
+        with httpx.Client(timeout=15.0, follow_redirects=True) as thread_client:
+            if ats == "lever" and try_eu_lever:
+                for lever_region in ("global", "eu"):
+                    result = probe_board(thread_client, ats, slug, region=lever_region)
+                    hit = _match_from_result(ats, result, region=lever_region)
+                    if hit:
+                        return hit
+                return None
+            result = probe_board(thread_client, ats, slug)
+            return _match_from_result(ats, result)
+
+    def _run_parallel_batch(ats_list: list[str]) -> AtsMatch | None:
+        if not ats_list:
+            return None
+        if len(ats_list) == 1:
+            return _probe_one(ats_list[0])
+
+        workers = min(12, len(ats_list))
+        pool = ThreadPoolExecutor(max_workers=workers)
+        futures = {pool.submit(_probe_one, ats): ats for ats in ats_list}
+        try:
+            matches: list[AtsMatch] = []
+            for fut in as_completed(futures):
+                try:
+                    hit = fut.result()
+                except Exception:  # noqa: BLE001
+                    continue
+                if hit:
+                    matches.append(hit)
+                    for pending in futures:
+                        if pending is not fut and not pending.done():
+                            pending.cancel()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    matches.sort(key=lambda m: order.index(m.ats_type))
+                    return matches[0]
+            return None
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+    if parallel_ats and len(order) > 1:
+        waves = probe_batches_for(order) if batch_ats else [order]
+        for wave in waves:
+            hit = _run_parallel_batch(wave)
+            if hit:
+                return hit
+        return None
 
     for ats in order:
-        if ats == "greenhouse":
-            ok, board_name = _greenhouse_board(client, slug)
-            if ok and _accept(board_name, ats, from_url_hint=from_url_hint and ats == prefer_ats):
-                return AtsMatch(
-                    ats_type="greenhouse",
-                    ats_slug=slug,
-                    careers_url=careers_url("greenhouse", slug),
-                    board_display_name=board_name,
-                )
-        if ats == "smartrecruiters":
-            ok, board_name = _smartrecruiters_board(client, slug)
-            if ok and _accept(board_name, ats, from_url_hint=from_url_hint and ats == prefer_ats):
-                return AtsMatch(
-                    ats_type="smartrecruiters",
-                    ats_slug=slug,
-                    careers_url=careers_url("smartrecruiters", slug),
-                    board_display_name=board_name,
-                )
-        if ats == "lever":
-            ok, board_name = _lever_board(client, slug, region="global")
-            if ok and _accept(board_name, ats, from_url_hint=from_url_hint and ats == prefer_ats):
-                return AtsMatch(
-                    ats_type="lever",
-                    ats_slug=slug,
-                    careers_url=careers_url("lever", slug),
-                    board_display_name=board_name,
-                )
-            if try_eu_lever:
-                ok, board_name = _lever_board(client, slug, region="eu")
-                if ok and _accept(board_name, ats, from_url_hint=from_url_hint and ats == prefer_ats):
+        region = "global"
+        if ats == "lever" and try_eu_lever:
+            for lever_region in ("global", "eu"):
+                result = probe_board(client, ats, slug, region=lever_region)
+                if result.has_jobs and _accept(
+                    result.board_name, ats, from_url_hint=from_url_hint and ats == prefer_ats
+                ):
                     return AtsMatch(
                         ats_type="lever",
                         ats_slug=slug,
-                        ats_region="eu",
+                        ats_region=lever_region,
                         careers_url=careers_url("lever", slug),
-                        board_display_name=board_name,
+                        board_display_name=result.board_name,
                     )
+            continue
+        result = probe_board(client, ats, slug, region=region)
+        if result.has_jobs and _accept(
+            result.board_name, ats, from_url_hint=from_url_hint and ats == prefer_ats
+        ):
+            return AtsMatch(
+                ats_type=ats,
+                ats_slug=slug,
+                careers_url=careers_url(ats, slug),
+                board_display_name=result.board_name,
+            )
+        time.sleep(0.15)
     return None
 
 
@@ -391,8 +379,30 @@ def resolve_candidate(
     *,
     try_eu_lever: bool = False,
     max_slug_attempts: int = 0,
+    website_first: bool = True,
+    parallel_ats: bool = True,
+    skip_ats: frozenset[str] | None = None,
+    only_ats: frozenset[str] | None = None,
+    batch_ats: bool = False,
 ) -> AtsMatch | None:
-    """Resolve ATS for one employer using hints then slug variants."""
+    """Resolve ATS for one employer: website careers links, then slug variants."""
+    if website_first:
+        if not candidate.website.strip():
+            from discovery.sources_curated import enrich_candidate_website
+
+            enrich_candidate_website(client, candidate)
+        if candidate.website.strip():
+            from discovery.careers_discovery import discover_ats_from_website
+
+            hit = discover_ats_from_website(
+                client,
+                candidate.website,
+                company_name=candidate.company_name,
+                try_eu_lever=try_eu_lever,
+            )
+            if hit:
+                return hit
+
     hints: list[str] = list(candidate.extra_slugs)
     prefer: str | None = None
     if candidate.ats_hint:
@@ -417,6 +427,10 @@ def resolve_candidate(
             prefer_ats=prefer if i == 0 else None,
             try_eu_lever=try_eu_lever,
             require_name_match=True,
+            parallel_ats=parallel_ats,
+            skip_ats=skip_ats,
+            only_ats=only_ats,
+            batch_ats=batch_ats,
         )
         if hit:
             return hit
@@ -441,6 +455,8 @@ def registry_row(
         "ats_slug": match.ats_slug,
         "ats_region": match.ats_region,
         "careers_url": match.careers_url or careers_url(match.ats_type, match.ats_slug),
+        "job_board_url": match.careers_url or careers_url(match.ats_type, match.ats_slug),
+        "discovery_source": candidate.discovery_source or "",
         "poll_enabled": "true",
         "notes": "; ".join(p for p in note_parts if p).strip("; "),
     }

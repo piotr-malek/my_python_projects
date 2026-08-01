@@ -13,23 +13,30 @@ Purpose-driven work is scattered across niche boards and opaque ATS pages. This 
 | Thing | Why |
 |-------|-----|
 | Python 3.12+ | Runs the pipeline |
-| Ollama + a local model | Scores jobs (`qwen3:14b-q4_K_M` by default) |
+| Gemini API key | Scores jobs (`gemini-3.5-flash-lite`). Use an [AI Studio key](https://aistudio.google.com/apikey) on a project with **billing disabled** so it stays free |
 | SMTP | Email — Gmail app password works |
-| Google Cloud + BigQuery | Optional — de-dupe + private registry (virtually free at personal scale) |
+| Google Cloud + BigQuery | Optional — curated registry (read) + job mirror (batch load; free tier friendly) |
 
 Copy `.env.example` → `.env`, the `profile/*.example.*` files, and `config/service_account.json.example`. Example files are the full config reference.
 
-Curated employers work without BigQuery: the repo ships `registry/curated_companies.csv` (213 mission-filtered orgs). BigQuery `curated_companies` takes priority when populated; otherwise ingest uses the CSV.
+Curated employers work without BigQuery: the repo ships `registry/curated_companies.csv` (EU-first, mission-filtered orgs). BigQuery `curated_companies` **takes priority when populated** — if you prune or extend the CSV, sync BigQuery too or the change won't take effect.
 
 ## How it fits together
 
 ```
-Mission job boards          Curated employers (213 orgs, CSV)
-        │                              │
-        └────────────┬─────────────────┘
-                     ▼
-        ingest → SQLite (+ BigQuery) → Ollama scoring → email
+Mission job boards + remote/EU aggregators      Curated employers (CSV/BigQuery)
+        │                                                    │
+        │  employer mission gate (cached per employer)        │
+        └──────────────────────┬─────────────────────────────┘
+                               ▼
+        ingest → title gate → SQLite → Gemini scoring → email
 ```
+
+Aggregator boards (Remotive, Arbeitnow, Jobicy, Himalayas, Remote OK, We Work
+Remotely, Working Nomads, HN "Who is hiring", Indeed) carry plenty of non-mission
+employers, so every board-sourced job passes an employer mission gate before it is
+scored. Verdicts are cached per employer in `employer_mission`, and employers that
+pass feed back into the curated registry.
 
 Two sections in the digest: curated employers first, then board listings.
 
@@ -75,13 +82,36 @@ Watershed,https://boards.greenhouse.io/watershed,climate,seeds
 
 BigQuery overrides the CSV when you've populated your own registry. Occasional slug mismatches happen for generic org names ("Health …", "Foundation …") — spot-check odd links.
 
-**Grow the list yourself** (optional): `python tools/build_registry.py --sources seeds --dry-run` probes ATS slugs; drop `--dry-run` to write to BigQuery. Refresh the shipped CSV from BQ: `python tools/export_curated_registry.py`. See [CONTRIBUTING.md](CONTRIBUTING.md) for discovery flags.
+**Grow the list yourself** (optional):
 
-## Picking a local model
+```bash
+# Batch: v1 job-board sources + seeds (+ v2 funders, bcorp, mined pool)
+python discovery/build_registry.py --sources 80000hours,escapethecity,climatebase,seeds
 
-Ollama (`OLLAMA_HOST`, `OLLAMA_MODEL`). Pull the model, keep the daemon running.
+# Continuous: mine orgs during ingest, then probe pool → curated_companies
+python main.py ingest
+python main.py discover-candidates --limit 100
+```
 
-First run with loose filters (e.g. any "engineer" title) can take **hours** — hundreds of jobs to score. Daily runs are much faster. Smaller models work; quality drops. Tune `OLLAMA_SCORE_WORKERS` / `OLLAMA_SCORE_BATCH_SIZE` if the GPU struggles.
+Refresh the shipped CSV from BQ: `python tools/export_curated_registry.py`. See [CONTRIBUTING.md](CONTRIBUTING.md) for discovery flags.
+
+## Scoring (Gemini free tier)
+
+Set `GEMINI_API_KEY` from [AI Studio](https://aistudio.google.com/apikey). Create the
+key on a Google Cloud project with **billing disabled** — Google cannot charge such a
+key, so exceeding the quota returns 429 rather than a bill.
+
+Two further guardrails live in code: `GEMINI_RPM` throttles requests per minute and
+`GEMINI_DAILY_REQUEST_BUDGET` caps requests per calendar day (persisted in
+`data/gemini_usage.json`, so restarts don't reset it). When the budget runs out the
+remaining jobs simply stay unscored and are picked up on the next run.
+
+Jobs are scored in batches (`LLM_SCORE_BATCH_SIZE`) to keep request counts low;
+steady-state usage is roughly 50–150 requests/day, well inside the free tier.
+
+Google retires pinned model ids without notice (`gemini-2.5-flash-lite` now 404s for
+new keys), so the client falls back through `GEMINI_MODEL_FALLBACKS` and logs a
+warning rather than leaving you without a digest.
 
 `MIN_COMBINED_SCORE` = digest cutoff (`0` = all scored). `SCORE_MAX_AGE_DAYS` skips stale postings.
 
@@ -101,14 +131,48 @@ python main.py ingest | score | digest | run-all
 | `--curated-only` / `--boards-only` | One ingest path |
 | `--limit N` / `--max N` | Cap companies / jobs scored |
 
-Schedule daily with cron or launchd, e.g. `30 7 * * * cd /path/to/good_jobs_digest && .venv/bin/python main.py run-all >> data/cron.log 2>&1`.
+### Scheduled runs (GitHub Actions)
+
+`.github/workflows/good-jobs-digest.yml` **at the repository root** (this project is a
+subdirectory of a monorepo, and GitHub only reads workflows from the root) runs the
+pipeline daily at 06:30 UTC, and can be triggered manually with a `dry_run` toggle.
+
+Repository **secrets**:
+
+| Secret | Purpose |
+|---|---|
+| `GEMINI_API_KEY` | Scoring |
+| `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_TO` | Sending the digest |
+| `GCP_SERVICE_ACCOUNT_JSON` | **Contents** of `config/service_account.json`, not a path — the file is gitignored, so the workflow recreates it and points `GOOGLE_APPLICATION_CREDENTIALS` at it |
+| `WEBSHARE_API_KEY` | Optional — proxies for Cloudflare-guarded boards (preferred over the list URL) |
+| `WEBSHARE_PROXY_LIST_URL` | Optional fallback if you don't set the API key |
+| `PREFERENCES_YAML` | Full contents of `profile/preferences.yaml` (gitignored, so the runner has no other copy) |
+
+Repository **variables**: `BQ_PROJECT_ID`, `BQ_DATASET_ID`, `BQ_LOCATION`.
+
+`data/jobs.db` is carried between runs with `actions/cache` (rolling key plus
+`restore-keys`), which is what keeps "already emailed" state. Because caches can be
+evicted, the workflow also sets `BQ_WRITE_DIGEST_HISTORY=true` so de-duplication
+survives in BigQuery regardless.
+
+Webshare rotates free proxies without notice, so the cached list is re-downloaded
+automatically whenever it is older than `WEBSHARE_PROXY_MAX_AGE_HOURS` (default 12) —
+no manual `tools/sync_webshare_proxies.py` run needed.
+
+Runner IPs are datacenter IPs, so Cloudflare-guarded boards (Climatebase, Tech Jobs
+for Good) may return 403 there. They degrade to zero rather than failing the run, and
+the digest's **Run health** footer reports any source that came back empty.
+
+To run locally on a schedule instead: `30 7 * * * cd /path/to/good_jobs_digest && .venv/bin/python main.py run-all >> data/cron.log 2>&1`.
+
+**BigQuery billing:** By default BQ reads `curated_companies` and batch-loads `jobs_normalized` only — no streaming inserts (the usual source of sub-dollar monthly charges). Optional audit tables (`raw_api_payloads`, `llm_score_events`, `selected_digest_jobs`) are off unless you set `BQ_WRITE_RAW_PAYLOADS`, `BQ_WRITE_LLM_SCORES`, or `BQ_WRITE_DIGEST_HISTORY` to `true` in `.env`.
 
 ## When something breaks
 
 - **No curated jobs** — check `registry/curated_companies.csv`, or run discovery into BigQuery.
 - **Board failures** — usually IP blocking; see proxies above.
-- **ReliefWeb empty** — set `RELIEFWEB_APPNAME` or disable it.
-- **Ollama timeouts** — lower `OLLAMA_SCORE_WORKERS` or use `--max`.
+- **Nothing gets scored** — check `GEMINI_API_KEY`; if the daily budget is spent the log says so and the run resumes tomorrow.
+- **Indeed board missing** — `pip install python-jobspy`, or set `BOARD_INDEED_ENABLED=false`.
 
 Tests: `pip install -r requirements-dev.txt && pytest`
 

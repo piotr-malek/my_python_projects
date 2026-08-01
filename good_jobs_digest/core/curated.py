@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from config import Settings
 from core.curated_registry import load_curated_board_keys as _load_curated_board_keys
+from discovery.ats_registry import CURATED_ATS_TYPES
 from storage.bq_repository import JobBigQuery
-
-CURATED_ATS_TYPES = frozenset({"greenhouse", "lever", "smartrecruiters"})
 
 
 def load_curated_board_keys(

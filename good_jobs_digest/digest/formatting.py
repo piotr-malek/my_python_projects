@@ -13,10 +13,14 @@ def _norm_key(s: str) -> str:
 
 
 def dedupe_by_company_title(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep highest combined_score per (company, title)."""
+    """Keep highest combined_score per canonical_job_id or (company, title)."""
     best: dict[tuple[str, str], dict[str, Any]] = {}
     for j in jobs:
-        key = (_norm_key(str(j.get("company_name") or "")), _norm_key(str(j.get("title") or "")))
+        ckey = str(j.get("canonical_job_id") or "").strip()
+        if ckey:
+            key = ("canonical", ckey)
+        else:
+            key = (_norm_key(str(j.get("company_name") or "")), _norm_key(str(j.get("title") or "")))
         score = float(j.get("combined_score") or 0)
         prev = best.get(key)
         if prev is None or score > float(prev.get("combined_score") or 0):

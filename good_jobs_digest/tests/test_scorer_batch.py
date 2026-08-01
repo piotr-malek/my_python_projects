@@ -7,6 +7,7 @@ from unittest.mock import patch
 from config import Settings
 from normalize.schema import JobScorePayload
 from rank.scorer import JobScorer, _loads_json_response
+from tests.stub_llm import StubLLM
 
 
 def _row(job_id: int) -> dict:
@@ -28,6 +29,10 @@ def _payload(**overrides) -> dict:
         "mission_alignment": 70,
         "candidate_fit": 75,
         "remote_ok": True,
+        "eu_hire_ok": True,
+        "timezone_ok": True,
+        "seniority_ok": True,
+        "fit_reasons": [],
         "extracted_salary": None,
         "top_requirements": ["python"],
         "risks_or_gaps": [],
@@ -39,11 +44,11 @@ def _payload(**overrides) -> dict:
 
 def test_score_chunk_batch_parses_array():
     settings = Settings()
-    settings.OLLAMA_SCORE_BATCH_SIZE = 2
-    scorer = JobScorer(settings)
+    settings.LLM_SCORE_BATCH_SIZE = 2
+    scorer = JobScorer(settings, llm=StubLLM())
     rows = [_row(1), _row(2)]
     fake = {"scores": [_payload(), _payload(role_relevance=85, one_line_summary="strong ml")]}
-    with patch.object(scorer, "_call_ollama", return_value=fake):
+    with patch.object(scorer, "_call_llm", return_value=fake):
         results = scorer._score_chunk(rows, "profile text")
     assert len(results) == 2
     assert results[0][0] == 1 and results[0][1] is not None
@@ -59,11 +64,11 @@ def test_loads_json_response_repairs_trailing_commas():
 
 def test_score_chunk_splits_on_batch_failure():
     settings = Settings()
-    scorer = JobScorer(settings)
+    scorer = JobScorer(settings, llm=StubLLM())
     rows = [_row(1), _row(2)]
     good = JobScorePayload.model_validate(_payload())
 
-    with patch.object(scorer, "_call_ollama", return_value=None):
+    with patch.object(scorer, "_call_llm", return_value=None):
         with patch.object(scorer, "score_job", return_value=good):
             results = scorer._score_chunk(rows, "profile")
 

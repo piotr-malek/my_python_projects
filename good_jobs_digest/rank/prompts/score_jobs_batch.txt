@@ -14,8 +14,13 @@ mission_alignment (0–100): excited-about sectors → 85–100; neutral → 50�
 
 candidate_fit (0–100): seniority + skills + background + organization fit; penalize too_junior/too_senior and avoid/weak stack requirements.
 
-remote_ok: Country-restricted remote (e.g. "United States (Remote)") is NOT global remote — false unless hire region matches candidate (EU). Plain "Remote" or unspecified location is OK. Global/work-from-anywhere roles are preferred. Trust detected location constraints over heuristic remote flag.
+Fit checks — decide each boolean strictly from the full posting. Candidate: EU citizen, based in the EU (CET), fully remote only, mid-level:
+- remote_ok: true only for fully-remote roles; any required office days or relocation → false. Plain "Remote"/unspecified → true.
+- eu_hire_ok: false when hiring is restricted to a non-EU region (e.g. "Remote — US only", "United States (Remote)", US city with no remote option, US work authorization required). EU/Europe hire region, global/work-from-anywhere, or nothing stated → true.
+- timezone_ok: false when US business hours or substantial US-timezone overlap is required (EST/PST hours, "overlap with US team"). European/flexible/unstated hours → true.
+- seniority_ok: false when the role is clearly above mid-level (senior/staff/principal/lead/head/management or far more required years) or below it (internship/graduate).
+- fit_reasons: up to 3 short strings explaining any false boolean (empty array when all true).
 
 Also populate: extracted_salary, top_requirements (≤5), risks_or_gaps (≤5), one_line_summary.
 
-Be conservative when information is missing.
+Be conservative on scores when information is missing — but for fit-check booleans, missing information means "no restriction stated".

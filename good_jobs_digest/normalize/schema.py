@@ -12,6 +12,12 @@ class JobScorePayload(BaseModel):
     mission_alignment: int = Field(ge=0, le=100)
     candidate_fit: int = Field(ge=0, le=100)
     remote_ok: bool
+    # Explicit fit checks the digest gates on. None = scored before these existed
+    # (row is rescored on the next score run).
+    eu_hire_ok: bool | None = None
+    timezone_ok: bool | None = None
+    seniority_ok: bool | None = None
+    fit_reasons: list[str] = Field(default_factory=list)
     extracted_salary: str | None = None
     top_requirements: list[str] = Field(default_factory=list)
     risks_or_gaps: list[str] = Field(default_factory=list)

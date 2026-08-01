@@ -7,12 +7,21 @@ import logging
 from pathlib import Path
 
 from config import Settings
-from discovery.resolve import parse_ats_from_text
+from discovery.ats_registry import CURATED_ATS_TYPES, parse_ats_from_text
 from storage.bq_repository import JobBigQuery
 
 logger = logging.getLogger(__name__)
 
-CURATED_CSV_FIELDS = ("company_name", "job_board_url", "mission_category", "discovery_source")
+CURATED_CSV_FIELDS = (
+    "company_name",
+    "job_board_url",
+    "mission_category",
+    "discovery_source",
+    "ats_type",
+    "ats_slug",
+    "ats_region",
+    "careers_url",
+)
 
 
 def load_curated_csv(path: Path, *, limit: int | None = None) -> list[dict[str, str]]:
@@ -24,15 +33,25 @@ def load_curated_csv(path: Path, *, limit: int | None = None) -> list[dict[str, 
     with path.open(newline="", encoding="utf-8") as f:
         for raw in csv.DictReader(f):
             name = (raw.get("company_name") or "").strip()
-            url = (raw.get("job_board_url") or "").strip()
+            url = (raw.get("job_board_url") or raw.get("careers_url") or "").strip()
             if not name or not url:
                 continue
+            ats_type = (raw.get("ats_type") or "").strip()
+            ats_slug = (raw.get("ats_slug") or "").strip()
+            if not ats_type or not ats_slug:
+                parsed = parse_ats_from_text(url)
+                if parsed:
+                    ats_type, ats_slug = parsed
             rows.append(
                 {
                     "company_name": name,
                     "job_board_url": url,
+                    "careers_url": (raw.get("careers_url") or url).strip(),
                     "mission_category": (raw.get("mission_category") or "mission").strip(),
                     "discovery_source": (raw.get("discovery_source") or "csv").strip(),
+                    "ats_type": ats_type,
+                    "ats_slug": ats_slug,
+                    "ats_region": (raw.get("ats_region") or "global").strip(),
                 }
             )
             if limit is not None and limit > 0 and len(rows) >= limit:
@@ -68,16 +87,18 @@ def load_curated_board_keys(
     allowed: frozenset[str] | None = None,
 ) -> set[tuple[str, str]]:
     """Return (ats_type, ats_slug) pairs from the active curated registry."""
-    allowed = allowed or frozenset({"greenhouse", "lever", "smartrecruiters"})
+    allowed = allowed or CURATED_ATS_TYPES
     keys: set[tuple[str, str]] = set()
     for item in load_curated_records(settings, bq, limit=limit):
-        url = (item.get("job_board_url") or "").strip()
-        if not url:
-            continue
-        parsed = parse_ats_from_text(url)
-        if not parsed:
-            continue
-        ats_type, ats_slug = parsed
-        if ats_type in allowed:
-            keys.add((ats_type.lower(), ats_slug.lower()))
+        ats_type = (item.get("ats_type") or "").strip().lower()
+        ats_slug = (item.get("ats_slug") or "").strip().lower()
+        if not ats_type or not ats_slug:
+            url = (item.get("job_board_url") or item.get("careers_url") or "").strip()
+            parsed = parse_ats_from_text(url)
+            if parsed:
+                ats_type, ats_slug = parsed
+                ats_type = ats_type.lower()
+                ats_slug = ats_slug.lower()
+        if ats_type in allowed and ats_slug:
+            keys.add((ats_type, ats_slug))
     return keys

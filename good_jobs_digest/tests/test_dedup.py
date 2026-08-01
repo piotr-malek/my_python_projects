@@ -115,7 +115,18 @@ def test_scored_jobs_not_requeued_until_content_changes(tmp_path):
     )
     repo.upsert_job(**base, description_text="v1", chash=content_hash("v1"), now_iso="2026-05-01T10:00:00+00:00")
     repo.set_prefilter(1, True)
-    repo.save_score(1, relevance=80, mission=80, fit=80, remote_ok=True, combined=80.0, llm_payload={})
+    repo.save_score(
+        1,
+        relevance=80,
+        mission=80,
+        fit=80,
+        remote_ok=True,
+        combined=80.0,
+        llm_payload={},
+        eu_hire_ok=True,
+        timezone_ok=True,
+        seniority_ok=True,
+    )
     assert len(repo.jobs_needing_score()) == 0
     repo.upsert_job(
         **base,

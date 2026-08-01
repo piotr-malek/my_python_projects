@@ -1,19 +1,18 @@
-"""Ollama mission scoring: auto-approve employers at or above a liberal score threshold."""
+"""Gemini mission scoring: auto-approve employers at or above a liberal score threshold."""
 
 from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-import ollama
 from pydantic import BaseModel, Field, ValidationError
 
 from config import Settings
+from rank.llm import BudgetExhausted, GeminiClient
 from normalize.schema import EmployerMissionScoreResult
 from rank.scorer import _extract_json_object
 
@@ -46,51 +45,33 @@ class _BatchMissionScorePayload(BaseModel):
     results: list[EmployerMissionScoreResult] = Field(min_length=1)
 
 
-_thread_local = threading.local()
-
-
 class EmployerMissionFilter:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, llm: GeminiClient | None = None):
         self._settings = settings
         prompt_path = (
             Path(__file__).resolve().parents[1] / "rank" / "prompts" / "score_mission_employers_batch.txt"
         )
         self._score_template = prompt_path.read_text(encoding="utf-8")
+        self._llm = llm or GeminiClient(settings)
+        self.budget_exhausted = False
 
-    def _client(self) -> ollama.Client:
-        client = getattr(_thread_local, "client", None)
-        if client is None:
-            client = ollama.Client(host=self._settings.OLLAMA_HOST)
-            _thread_local.client = client
-        return client
-
-    def _generate_options(self) -> dict[str, Any]:
-        return {
-            "temperature": 0.1,
-            "num_predict": self._settings.OLLAMA_NUM_PREDICT,
-            "num_ctx": 8192,
-            "top_p": 0.9,
-        }
-
-    def _call_ollama(self, prompt: str) -> dict[str, Any] | None:
-        client = self._client()
+    def _call_llm(self, prompt: str) -> dict[str, Any] | None:
+        if self.budget_exhausted:
+            return None
         for temp in (0.1, 0.0):
             try:
-                response = client.generate(
-                    model=self._settings.OLLAMA_MODEL,
-                    prompt=prompt,
-                    format=MISSION_SCORE_BATCH_JSON_SCHEMA,
-                    keep_alive=self._settings.OLLAMA_KEEP_ALIVE,
-                    options={**self._generate_options(), "temperature": temp},
+                raw = self._llm.generate_json(
+                    prompt,
+                    schema=MISSION_SCORE_BATCH_JSON_SCHEMA,
+                    temperature=temp,
                 )
-                raw_text = response.get("response") or ""
-                return json.loads(_extract_json_object(raw_text))
-            except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                logger.info("mission score parse failed (temp=%s): %s", temp, exc)
-                continue
-            except Exception as exc:
-                logger.warning("ollama mission score error: %s", exc)
-                break
+            except BudgetExhausted as exc:
+                logger.warning("Gemini daily budget spent (%s) — employers left unscored", exc)
+                self.budget_exhausted = True
+                return None
+            if raw is not None:
+                return raw
+            logger.info("mission score produced no JSON (temp=%s)", temp)
         return None
 
     def _build_score_batch_prompt(self, employers: list[dict[str, str]]) -> str:
@@ -109,7 +90,7 @@ class EmployerMissionFilter:
         if not employers:
             return []
 
-        raw = self._call_ollama(self._build_score_batch_prompt(employers))
+        raw = self._call_llm(self._build_score_batch_prompt(employers))
         if raw is None:
             logger.warning("mission score batch failed for %s employers", len(employers))
             return []
@@ -138,6 +119,18 @@ class EmployerMissionFilter:
         return scored
 
     def _score_chunk_fallback(self, employers: list[dict[str, str]]) -> list[dict[str, str]]:
+        """Retry a failed batch one employer at a time.
+
+        Never recurse on a single row: _score_chunk calls back here on a validation
+        failure, so a row the model consistently mangles would otherwise ping-pong
+        between the two until the stack blows.
+        """
+        if len(employers) <= 1:
+            logger.warning(
+                "mission score unusable for %s — skipping",
+                employers[0].get("company_name") if employers else "(empty)",
+            )
+            return []
         scored: list[dict[str, str]] = []
         for row in employers:
             scored.extend(self._score_chunk([row]))
@@ -148,8 +141,8 @@ class EmployerMissionFilter:
         if not employers:
             return []
 
-        batch_size = max(1, self._settings.OLLAMA_MISSION_BATCH_SIZE)
-        workers = max(1, self._settings.OLLAMA_MISSION_WORKERS)
+        batch_size = max(1, self._settings.LLM_MISSION_BATCH_SIZE)
+        workers = max(1, self._settings.LLM_MISSION_WORKERS)
         chunks: list[list[dict[str, str]]] = [
             employers[i : i + batch_size] for i in range(0, len(employers), batch_size)
         ]

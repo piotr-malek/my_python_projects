@@ -1,0 +1,155 @@
+name: good_jobs_digest — daily digest
+
+# This repo hosts several projects, so everything runs inside good_jobs_digest/.
+# Workflows only take effect from the repository root, not from a subdirectory.
+
+on:
+  schedule:
+    # 06:30 UTC — early morning in Europe/Warsaw year round.
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build the digest but don't send email"
+        type: boolean
+        default: false
+
+concurrency:
+  group: good-jobs-digest
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: good_jobs_digest
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: good_jobs_digest/requirements.txt
+
+      # Fail fast with a readable list instead of dying deep in the pipeline.
+      - name: Preflight — check secrets and variables
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PREFERENCES_YAML: ${{ secrets.PREFERENCES_YAML }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          WEBSHARE_API_KEY: ${{ secrets.WEBSHARE_API_KEY }}
+          BQ_PROJECT_ID: ${{ vars.BQ_PROJECT_ID }}
+          BQ_DATASET_ID: ${{ vars.BQ_DATASET_ID }}
+        run: |
+          missing=""
+          for v in GEMINI_API_KEY PREFERENCES_YAML; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Required secrets missing:$missing (Settings → Secrets and variables → Actions)"
+            exit 1
+          fi
+          # Email is only needed for a real send, not a dry run.
+          for v in SMTP_USER SMTP_PASSWORD EMAIL_TO; do
+            [ -z "${!v}" ] && echo "::warning::$v is not set — a non-dry-run send will fail."
+          done
+          [ -z "$GCP_SERVICE_ACCOUNT_JSON" ] && echo "::warning::GCP_SERVICE_ACCOUNT_JSON not set — falling back to the CSV registry."
+          [ -z "$BQ_PROJECT_ID" ] || [ -z "$BQ_DATASET_ID" ] && echo "::warning::BQ_PROJECT_ID/BQ_DATASET_ID variables not set — BigQuery will be skipped."
+          [ -z "$WEBSHARE_API_KEY" ] && echo "::warning::WEBSHARE_API_KEY not set — Cloudflare-guarded boards may return 0."
+          echo "Preflight OK."
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # jobs.db carries the "already emailed" flags and the scored-jobs cache.
+      # The rolling key restores the newest previous DB; BigQuery digest history
+      # is the durable backstop if the cache is ever evicted.
+      - name: Restore job database
+        uses: actions/cache/restore@v4
+        with:
+          path: good_jobs_digest/data/jobs.db
+          key: jobs-db-${{ github.run_id }}
+          restore-keys: |
+            jobs-db-
+
+      # These three live outside git on purpose (this repo is public), so the
+      # runner has to reconstruct them from secrets before the pipeline starts.
+      # NOTE: the secret must hold the *contents* of the service account JSON, not
+      # a path. GOOGLE_APPLICATION_CREDENTIALS points at the file this step writes;
+      # the file itself is gitignored and does not exist on a fresh checkout.
+      - name: Write service account credentials
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+        run: |
+          mkdir -p config
+          if [ -z "$GCP_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::warning::GCP_SERVICE_ACCOUNT_JSON is empty — BigQuery is unavailable, so the run falls back to registry/curated_companies.csv and cross-run digest de-dupe is disabled."
+            exit 0
+          fi
+          printf '%s' "$GCP_SERVICE_ACCOUNT_JSON" > config/service_account.json
+          python -c "import json; json.load(open('config/service_account.json'))" \
+            || { echo "::error::GCP_SERVICE_ACCOUNT_JSON is not valid JSON (paste the file contents, not the path)."; exit 1; }
+
+      - name: Write scoring preferences
+        env:
+          PREFERENCES_YAML: ${{ secrets.PREFERENCES_YAML }}
+        run: |
+          if [ -z "$PREFERENCES_YAML" ]; then
+            echo "::error::PREFERENCES_YAML secret is empty — scoring needs profile/preferences.yaml."
+            exit 1
+          fi
+          printf '%s' "$PREFERENCES_YAML" > profile/preferences.yaml
+          python -c "import yaml,sys; yaml.safe_load(open('profile/preferences.yaml')) or sys.exit('preferences.yaml is empty')"
+
+
+      - name: Run pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          # Either works; the API key is preferred (it filters out dead proxies).
+          WEBSHARE_API_KEY: ${{ secrets.WEBSHARE_API_KEY }}
+          WEBSHARE_PROXY_LIST_URL: ${{ secrets.WEBSHARE_PROXY_LIST_URL }}
+          GOOGLE_APPLICATION_CREDENTIALS: config/service_account.json
+          BQ_ENABLED: "true"
+          BQ_PROJECT_ID: ${{ vars.BQ_PROJECT_ID }}
+          BQ_DATASET_ID: ${{ vars.BQ_DATASET_ID }}
+          BQ_LOCATION: ${{ vars.BQ_LOCATION }}
+          # Durable de-dupe that survives cache eviction.
+          BQ_WRITE_DIGEST_HISTORY: "true"
+          # Runner IPs are datacenter IPs, so Cloudflare-guarded boards (Climatebase,
+          # Tech Jobs for Good) often 403 here. They degrade to 0 rather than failing
+          # the run, and the digest's health footer reports which sources came back empty.
+          CI: "true"
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python main.py run-all --dry-run-email
+          else
+            python main.py run-all
+          fi
+
+      - name: Save job database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: good_jobs_digest/data/jobs.db
+          key: jobs-db-${{ github.run_id }}
+
+      - name: Upload digest and usage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ github.run_id }}
+          path: |
+            good_jobs_digest/data/digests/
+            good_jobs_digest/data/gemini_usage.json
+          if-no-files-found: ignore
+          retention-days: 14

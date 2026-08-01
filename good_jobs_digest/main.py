@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import date, datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from config import settings
@@ -20,6 +22,7 @@ from digest.selection import exclude_already_sent
 from pipelines.curated_ats.ingest import ingest_curated_ats
 from pipelines.job_boards import ingest_job_boards
 from rank.scorer import JobScorer
+from rank.employer_mission_gate import filter_jobs_by_employer_mission
 from storage.bq_repository import JobBigQuery
 from storage.repository import JobRepository
 
@@ -161,7 +164,9 @@ def cmd_score(args: argparse.Namespace) -> None:
                 d.update(bq_row)
         jobs.append(d)
 
+    jobs = filter_jobs_by_employer_mission(jobs, repo=repo, settings=settings)
     jobs_by_id = {int(j["id"]): j for j in jobs}
+    logger.info("After employer mission gate: %s job(s) to score", len(jobs))
     ok = 0
     skipped = 0
     for job_id, out in scorer.score_jobs_parallel(jobs, scoring_input):
@@ -184,14 +189,17 @@ def cmd_score(args: argparse.Namespace) -> None:
             remote_ok=out.remote_ok,
             combined=combined,
             llm_payload=out.as_dict(),
+            eu_hire_ok=out.eu_hire_ok,
+            timezone_ok=out.timezone_ok,
+            seniority_ok=out.seniority_ok,
         )
-        if bq:
+        if bq and settings.BQ_WRITE_LLM_SCORES:
             bq.append_llm_score(
                 sqlite_job_id=job_id,
                 source=row["source"],
                 ats_slug=row["ats_slug"],
                 source_job_id=row["source_job_id"],
-                ollama_model=settings.OLLAMA_MODEL,
+                ollama_model=settings.GEMINI_MODEL,  # BQ column predates the provider swap
                 role_relevance=out.role_relevance,
                 mission_alignment=out.mission_alignment,
                 candidate_fit=out.candidate_fit,
@@ -200,7 +208,7 @@ def cmd_score(args: argparse.Namespace) -> None:
                 llm_json=json.dumps(out.as_dict()),
                 scored_at=_now_iso(),
             )
-    if bq:
+    if bq and settings.BQ_WRITE_LLM_SCORES:
         bq.flush_llm_scores()
     logger.info("Score finished (%s ok, %s skipped)", ok, skipped)
 
@@ -221,16 +229,22 @@ def cmd_digest(args: argparse.Namespace) -> None:
         if removed:
             logger.info("Purged %s jobs from boards not in curated registry", removed)
 
-    sent_keys = bq.fetch_sent_job_keys() if bq else set()
+    sent_keys = bq.fetch_sent_job_keys() if bq and settings.BQ_WRITE_DIGEST_HISTORY else set()
     if bq is None:
         logger.warning("BigQuery unavailable — prior digest de-dupe is disabled")
     elif sent_keys:
         logger.info("BQ: %s job(s) already sent in a prior digest", len(sent_keys))
 
     prefs = load_preferences(settings.PREFERENCES_PATH)
-    remote_only = digest_remote_only(prefs, default=settings.DIGEST_REMOTE_ONLY)
-    logger.info("Digest remote-only filter: %s (from preferences)", remote_only)
+    # An explicit .env setting wins; preferences.yaml digest.remote_only is the fallback.
+    if os.getenv("DIGEST_REMOTE_ONLY") is not None:
+        remote_only = settings.DIGEST_REMOTE_ONLY
+        logger.info("Digest remote-only filter: %s (from .env)", remote_only)
+    else:
+        remote_only = digest_remote_only(prefs, default=settings.DIGEST_REMOTE_ONLY)
+        logger.info("Digest remote-only filter: %s (from preferences)", remote_only)
 
+    top_n = settings.DIGEST_TOP_N if settings.DIGEST_TOP_N > 0 else None
     curated_rows = exclude_already_sent(
         repo.jobs_for_digest(
             min_combined=settings.MIN_COMBINED_SCORE,
@@ -238,6 +252,8 @@ def cmd_digest(args: argparse.Namespace) -> None:
             ats_types=list(CURATED_ATS_TYPES),
             curated_board_keys=curated_keys,
             unsent_only=True,
+            min_fit=settings.MIN_CANDIDATE_FIT,
+            top_n=top_n,
         ),
         sent_keys,
     )
@@ -247,6 +263,8 @@ def cmd_digest(args: argparse.Namespace) -> None:
             remote_only=remote_only,
             ats_types=[BOARD_ATS_TYPE],
             unsent_only=True,
+            min_fit=settings.MIN_CANDIDATE_FIT,
+            top_n=top_n,
         ),
         sent_keys,
     )
@@ -255,10 +273,25 @@ def cmd_digest(args: argparse.Namespace) -> None:
         len(curated_rows),
         len(board_rows),
     )
+    usage_path = getattr(settings, "GEMINI_USAGE_PATH", None)
+    llm_usage: dict[str, object] | None = None
+    if usage_path and Path(usage_path).is_file():
+        try:
+            recorded = json.loads(Path(usage_path).read_text(encoding="utf-8"))
+            if str(recorded.get("date")) == date.today().isoformat():
+                llm_usage = {
+                    "used": recorded.get("count"),
+                    "budget": settings.GEMINI_DAILY_REQUEST_BUDGET,
+                }
+        except (OSError, json.JSONDecodeError):
+            llm_usage = None
+
     text = build_markdown_digest(
         curated_rows,
         board_rows,
         digest_date=date.today(),
+        source_stats=repo.latest_source_stats(),
+        llm_usage=llm_usage,
     )
     mailer = JobDigestMailer(settings)
     curated_deduped = dedupe_by_company_title([dict(r) for r in curated_rows])
@@ -285,7 +318,7 @@ def cmd_digest(args: argparse.Namespace) -> None:
         raise SystemExit(f"SMTP failed ({exc}); wrote {path}") from exc
     included_ids = [int(r["id"]) for r in curated_rows] + [int(r["id"]) for r in board_rows]
     repo.mark_digest_included(included_ids)
-    if bq and not args.dry_run_email:
+    if bq and settings.BQ_WRITE_DIGEST_HISTORY and not args.dry_run_email:
         bq.append_selected_jobs(
             digest_date=date.today().isoformat(),
             selected_at=_now_iso(),
@@ -300,9 +333,22 @@ def cmd_run_all(args: argparse.Namespace) -> None:
     cmd_digest(args)
 
 
+def cmd_discover_candidates(args: argparse.Namespace) -> None:
+    from discovery.discover_candidates import run_discover_candidates
+
+    code = run_discover_candidates(
+        limit=getattr(args, "limit", 100) or 100,
+        dry_run=getattr(args, "dry_run", False),
+        skip_llm=getattr(args, "skip_llm", False),
+        bulk=getattr(args, "bulk", False),
+    )
+    if code != 0:
+        raise SystemExit(code)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="good_jobs_digest — mission boards + curated ATS → SQLite → Ollama → email"
+        description="good_jobs_digest — mission boards + curated ATS → SQLite → Gemini → email"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -329,6 +375,16 @@ def main() -> None:
         help="Delete local SQLite jobs DB (use after clearing BQ for a clean run)",
     )
     p_reset.set_defaults(func=cmd_reset_db)
+
+    p_discover = sub.add_parser(
+        "discover-candidates",
+        help="Probe mined employer pool → curated_companies (run after ingest)",
+    )
+    p_discover.add_argument("--limit", type=int, default=100)
+    p_discover.add_argument("--dry-run", action="store_true")
+    p_discover.add_argument("--skip-llm", action="store_true")
+    p_discover.add_argument("--bulk", action="store_true")
+    p_discover.set_defaults(func=cmd_discover_candidates)
 
     p_all = sub.add_parser("run-all", help="ingest → score → digest")
     p_all.add_argument("--limit", type=int, default=None)

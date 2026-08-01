@@ -16,6 +16,8 @@ class JobBoardFetchResult:
     sample_job: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     notes: str = ""
+    # Full listing payload for ingest (optional; probes may omit).
+    jobs: list[dict[str, Any]] = field(default_factory=list)
 
     def summary_line(self) -> str:
         status = "OK" if self.ok else "FAIL"

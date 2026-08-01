@@ -59,6 +59,210 @@ def normalize_greenhouse(
     }
 
 
+def normalize_ashby(
+    job: dict[str, Any],
+    *,
+    company_name: str,
+    mission_category: str | None,
+    ats_slug: str,
+) -> dict[str, Any]:
+    title = str(job.get("title") or "")
+    desc = strip_html_to_text(str(job.get("descriptionHtml") or job.get("description") or ""))
+    loc = job.get("location") or job.get("locationName") or ""
+    loc_s = str(loc) if loc else ""
+    is_remote = _remote_from_strings(title, desc, loc_s) or bool(job.get("isRemote"))
+    return {
+        "source": "ashby",
+        "source_job_id": str(job.get("id") or job.get("jobUrl") or title),
+        "company_name": company_name,
+        "mission_category": mission_category,
+        "ats_type": "ashby",
+        "ats_slug": ats_slug,
+        "title": title,
+        "url": str(job.get("jobUrl") or job.get("applyUrl") or ""),
+        "location_text": loc_s or None,
+        "is_remote": is_remote,
+        "salary_text": str(job.get("compensationTierSummary") or "") or None,
+        "description_text": desc or title,
+        "posted_at_hint": str(job.get("publishedAt") or "") or None,
+    }
+
+
+def normalize_workable(
+    job: dict[str, Any],
+    *,
+    company_name: str,
+    mission_category: str | None,
+    ats_slug: str,
+) -> dict[str, Any]:
+    title = str(job.get("title") or "")
+    desc = strip_html_to_text(str(job.get("description") or job.get("full_description") or ""))
+    loc = job.get("location") or {}
+    loc_s = ""
+    if isinstance(loc, dict):
+        loc_s = str(loc.get("country") or loc.get("city") or loc.get("location_str") or "")
+    elif loc:
+        loc_s = str(loc)
+    is_remote = _remote_from_strings(title, desc, loc_s) or bool(job.get("remote"))
+    return {
+        "source": "workable",
+        "source_job_id": str(job.get("shortcode") or job.get("id") or title),
+        "company_name": company_name,
+        "mission_category": mission_category,
+        "ats_type": "workable",
+        "ats_slug": ats_slug,
+        "title": title,
+        "url": str(job.get("url") or job.get("application_url") or ""),
+        "location_text": loc_s or None,
+        "is_remote": is_remote,
+        "salary_text": None,
+        "description_text": desc or title,
+        "posted_at_hint": str(job.get("published") or "") or None,
+    }
+
+
+def normalize_recruitee(
+    job: dict[str, Any],
+    *,
+    company_name: str,
+    mission_category: str | None,
+    ats_slug: str,
+) -> dict[str, Any]:
+    title = str(job.get("title") or "")
+    desc = strip_html_to_text(str(job.get("description") or job.get("requirements") or ""))
+    loc_s = str(job.get("location") or job.get("city") or "")
+    is_remote = _remote_from_strings(title, desc, loc_s) or bool(job.get("remote"))
+    return {
+        "source": "recruitee",
+        "source_job_id": str(job.get("id") or job.get("slug") or title),
+        "company_name": company_name,
+        "mission_category": mission_category,
+        "ats_type": "recruitee",
+        "ats_slug": ats_slug,
+        "title": title,
+        "url": str(job.get("careers_url") or job.get("url") or ""),
+        "location_text": loc_s or None,
+        "is_remote": is_remote,
+        "salary_text": str(job.get("salary") or "") or None,
+        "description_text": desc or title,
+        "posted_at_hint": str(job.get("published_at") or "") or None,
+    }
+
+
+def normalize_personio(
+    job: dict[str, Any],
+    *,
+    company_name: str,
+    mission_category: str | None,
+    ats_slug: str,
+) -> dict[str, Any]:
+    title = str(job.get("name") or job.get("title") or "")
+    desc = strip_html_to_text(str(job.get("jobDescriptions") or job.get("description") or ""))
+    loc_s = str(job.get("office") or job.get("subcompany") or "")
+    is_remote = _remote_from_strings(title, desc, loc_s)
+    jid = str(job.get("id") or title)
+    tld = job.get("tld") or "de"
+    return {
+        "source": "personio",
+        "source_job_id": jid,
+        "company_name": company_name,
+        "mission_category": mission_category,
+        "ats_type": "personio",
+        "ats_slug": ats_slug,
+        "title": title,
+        "url": f"https://{ats_slug}.jobs.personio.{tld}/job/{jid}",
+        "location_text": loc_s or None,
+        "is_remote": is_remote,
+        "salary_text": None,
+        "description_text": desc or title,
+        "posted_at_hint": str(job.get("createdAt") or "") or None,
+    }
+
+
+def normalize_workday(
+    job: dict[str, Any],
+    *,
+    company_name: str,
+    mission_category: str | None,
+    ats_slug: str,
+) -> dict[str, Any]:
+    title = str(job.get("title") or job.get("jobPostingTitle") or "")
+    desc = strip_html_to_text(str(job.get("jobDescription") or job.get("description") or ""))
+    loc = job.get("locationsText") or job.get("location") or ""
+    loc_s = str(loc) if loc else ""
+    is_remote = _remote_from_strings(title, desc, loc_s)
+    tenant = job.get("_tenant") or ats_slug.split("|")[0]
+    site = job.get("_site") or (ats_slug.split("|")[1] if "|" in ats_slug else "External")
+    wd = job.get("_wd_host") or "wd1"
+    ext_path = str(job.get("externalPath") or "")
+    url = f"https://{wd}.myworkdayjobs.com{ext_path}" if ext_path.startswith("/") else ext_path
+    return {
+        "source": "workday",
+        "source_job_id": str(job.get("bulletFields", [title])[0] if job.get("bulletFields") else title),
+        "company_name": company_name,
+        "mission_category": mission_category,
+        "ats_type": "workday",
+        "ats_slug": ats_slug,
+        "title": title,
+        "url": url or f"https://{wd}.myworkdayjobs.com/{tenant}/{site}",
+        "location_text": loc_s or None,
+        "is_remote": is_remote,
+        "salary_text": None,
+        "description_text": desc or title,
+        "posted_at_hint": str(job.get("postedOn") or "") or None,
+    }
+
+
+def _simple_list_normalizer(
+    job: dict[str, Any],
+    *,
+    source: str,
+    ats_type: str,
+    ats_slug: str,
+    company_name: str,
+    mission_category: str | None,
+    title_key: str = "title",
+    id_key: str = "id",
+    url_key: str = "url",
+) -> dict[str, Any]:
+    title = str(job.get(title_key) or job.get("name") or "")
+    desc = strip_html_to_text(str(job.get("description") or job.get("summary") or ""))
+    loc_s = str(job.get("location") or job.get("city") or "")
+    return {
+        "source": source,
+        "source_job_id": str(job.get(id_key) or title),
+        "company_name": company_name,
+        "mission_category": mission_category,
+        "ats_type": ats_type,
+        "ats_slug": ats_slug,
+        "title": title,
+        "url": str(job.get(url_key) or job.get("link") or ""),
+        "location_text": loc_s or None,
+        "is_remote": _remote_from_strings(title, desc, loc_s),
+        "salary_text": None,
+        "description_text": desc or title,
+        "posted_at_hint": str(job.get("posted") or job.get("date") or "") or None,
+    }
+
+
+def normalize_bamboohr(job: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return _simple_list_normalizer(job, source="bamboohr", ats_type="bamboohr", **kwargs)
+
+
+def normalize_breezy(job: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return _simple_list_normalizer(job, source="breezy", ats_type="breezy", title_key="name", **kwargs)
+
+
+def normalize_jazzhr(job: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return _simple_list_normalizer(job, source="jazzhr", ats_type="jazzhr", **kwargs)
+
+
+def normalize_teamtailor(job: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    return _simple_list_normalizer(
+        job, source="teamtailor", ats_type="teamtailor", title_key="title", url_key="url", **kwargs
+    )
+
+
 def normalize_lever(
     job: dict[str, Any],
     *,
@@ -174,3 +378,4 @@ def normalize_smartrecruiters(
         "description_text": desc,
         "posted_at_hint": posted_s,
     }
+

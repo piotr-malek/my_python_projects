@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SEEDS_PATH = ROOT / "discovery" / "seeds" / "mission_employers.csv"
+EU_MISSION_TECH_SEEDS_PATH = ROOT / "discovery" / "seeds" / "eu_mission_tech.csv"
 B_CORP_HOST = "https://94eo8lmsqa0nd3j5p.a1.typesense.net"
 B_CORP_COLLECTION = "companies-production-en-us"
 B_CORP_MAX_PER_PAGE = 250
@@ -38,9 +39,63 @@ B_CORP_CHECKPOINT_PATH = ROOT / "data" / "bcorp_checkpoint.json"
 B_CORP_JSONL_PATH = ROOT / "data" / "bcorp_companies.jsonl"
 B_CORP_SOURCE_PAGE = "https://www.bcorporation.net/en-us/find-a-b-corp/"
 
+# Typesense hqCountry values for EU27 + EEA + Switzerland + UK.
+# "Netherlands The" is the directory's spelling (not "Netherlands").
+B_CORP_EU_HQ_COUNTRIES: tuple[str, ...] = (
+    "Austria",
+    "Belgium",
+    "Bulgaria",
+    "Croatia",
+    "Cyprus",
+    "Czech Republic",
+    "Denmark",
+    "Estonia",
+    "Finland",
+    "France",
+    "Germany",
+    "Greece",
+    "Hungary",
+    "Iceland",
+    "Ireland",
+    "Italy",
+    "Latvia",
+    "Lithuania",
+    "Luxembourg",
+    "Malta",
+    "Netherlands The",
+    "Norway",
+    "Poland",
+    "Portugal",
+    "Romania",
+    "Slovakia",
+    "Slovenia",
+    "Spain",
+    "Sweden",
+    "Switzerland",
+    "United Kingdom",
+)
+
 
 def _env(name: str, default: str = "") -> str:
     return (os.getenv(name) or default).strip()
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def bcorp_country_filter() -> str:
+    """Typesense filter_by clause for B Corp crawl (empty = no country filter)."""
+    explicit = _env("BCORP_COUNTRY_FILTER")
+    if explicit:
+        return explicit
+    if _env_bool("BCORP_EU_ONLY", True):
+        joined = ", ".join(B_CORP_EU_HQ_COUNTRIES)
+        return f"hqCountry:=[{joined}]"
+    return ""
 
 
 def _merge(
@@ -168,7 +223,12 @@ def collect_from_climatebase(
     return out
 
 
-def collect_from_seeds(path: Path = DEFAULT_SEEDS_PATH) -> dict[str, EmployerCandidate]:
+def collect_from_seeds(
+    path: Path = DEFAULT_SEEDS_PATH,
+    *,
+    discovery_source: str = "seeds",
+    default_mission_category: str = "mission",
+) -> dict[str, EmployerCandidate]:
     out: dict[str, EmployerCandidate] = {}
     if not path.exists():
         logger.warning("Seed file missing: %s", path)
@@ -188,9 +248,11 @@ def collect_from_seeds(path: Path = DEFAULT_SEEDS_PATH) -> dict[str, EmployerCan
                 out,
                 EmployerCandidate(
                     company_name=name,
-                    mission_category=(raw.get("mission_category") or "mission").strip(),
+                    mission_category=(
+                        raw.get("mission_category") or default_mission_category
+                    ).strip(),
                     website=(raw.get("website") or "").strip(),
-                    discovery_source="seeds",
+                    discovery_source=discovery_source,
                     ats_hint=hint,
                 ),
             )
@@ -246,9 +308,22 @@ def _discover_bcorp_typesense_key() -> str:
     return ""
 
 
-def _bcorp_search_page(*, page: int, per_page: int, headers: dict[str, str]) -> dict:
+def _bcorp_search_page(
+    *,
+    page: int,
+    per_page: int,
+    headers: dict[str, str],
+    filter_by: str = "",
+) -> dict:
     url = f"{B_CORP_HOST}/collections/{B_CORP_COLLECTION}/documents/search"
-    params = {"q": "*", "query_by": "name", "per_page": per_page, "page": page}
+    params: dict[str, str | int] = {
+        "q": "*",
+        "query_by": "name",
+        "per_page": per_page,
+        "page": page,
+    }
+    if filter_by:
+        params["filter_by"] = filter_by
     with json_client(timeout=45.0) as client:
         resp = client.get(url, params=params, headers=headers)
         resp.raise_for_status()
@@ -276,6 +351,37 @@ def _bcorp_unique_id(doc: dict) -> str:
     return str(doc.get("id") or doc.get("slug") or "").strip().lower()
 
 
+def _load_bcorp_candidates_from_jsonl(path: Path) -> dict[str, EmployerCandidate]:
+    """Load employers from a completed B Corp directory crawl."""
+    out: dict[str, EmployerCandidate] = {}
+    if not path.is_file():
+        return out
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                doc = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = str(doc.get("name") or "").strip()
+            if not name:
+                continue
+            website = str(doc.get("website") or "")
+            _merge(
+                out,
+                EmployerCandidate(
+                    company_name=name,
+                    mission_category="bcorp",
+                    website=website,
+                    discovery_source="bcorp",
+                ),
+            )
+    logger.info("B Corp: loaded %s employers from %s", len(out), path.name)
+    return out
+
+
 def collect_from_bcorp(
     *,
     per_page: int = B_CORP_MAX_PER_PAGE,
@@ -284,25 +390,52 @@ def collect_from_bcorp(
     checkpoint_path: Path = B_CORP_CHECKPOINT_PATH,
     output_jsonl_path: Path = B_CORP_JSONL_PATH,
     reset_checkpoint: bool = False,
+    filter_by: str | None = None,
 ) -> dict[str, EmployerCandidate]:
     """
     Fetch B Corp directory from Typesense API with retries/checkpoints.
 
-    Uses BCORP_TYPESENSE_API_KEY from env.
+    Uses BCORP_TYPESENSE_API_KEY from env. Default country filter is EU-first
+    (BCORP_EU_ONLY=true); override with BCORP_COUNTRY_FILTER or pass filter_by.
     """
     if per_page > B_CORP_MAX_PER_PAGE:
         per_page = B_CORP_MAX_PER_PAGE
     delay = 1.0 / max(0.1, requests_per_second)
+    active_filter = bcorp_country_filter() if filter_by is None else filter_by
+
     if reset_checkpoint and checkpoint_path.exists():
         checkpoint_path.unlink()
 
-    headers = _bcorp_headers()
     checkpoint = _load_bcorp_checkpoint(checkpoint_path)
-    seen_ids: set[str] = set(checkpoint.get("seen_ids", []))
+    # Filter change invalidates a prior (often US-wide) crawl.
+    if checkpoint and checkpoint.get("filter_by", "") != active_filter:
+        logger.info(
+            "B Corp filter changed (%r → %r); resetting checkpoint",
+            checkpoint.get("filter_by"),
+            active_filter,
+        )
+        checkpoint = {}
+        if checkpoint_path.exists():
+            checkpoint_path.unlink()
+        if output_jsonl_path.exists():
+            output_jsonl_path.unlink()
+
     last_completed_page = int(checkpoint.get("last_completed_page", 0) or 0)
     total_pages_checkpoint = int(checkpoint.get("total_pages", 0) or 0)
+    if (
+        not reset_checkpoint
+        and total_pages_checkpoint > 0
+        and last_completed_page >= total_pages_checkpoint
+        and output_jsonl_path.exists()
+    ):
+        return _load_bcorp_candidates_from_jsonl(output_jsonl_path)
 
-    first = _bcorp_search_page(page=1, per_page=per_page, headers=headers)
+    headers = _bcorp_headers()
+    seen_ids: set[str] = set(checkpoint.get("seen_ids", []))
+
+    first = _bcorp_search_page(
+        page=1, per_page=per_page, headers=headers, filter_by=active_filter
+    )
     found = int(first.get("found") or 0)
     total_pages = int(math.ceil(found / per_page)) if found else 0
     if max_pages > 0:
@@ -313,6 +446,12 @@ def collect_from_bcorp(
             total_pages_checkpoint,
             total_pages,
         )
+    logger.info(
+        "B Corp crawl: found=%s pages=%s filter=%r",
+        found,
+        total_pages,
+        active_filter or "(none)",
+    )
 
     out: dict[str, EmployerCandidate] = {}
     output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -323,7 +462,12 @@ def collect_from_bcorp(
             data = None
             for attempt in range(3):
                 try:
-                    data = _bcorp_search_page(page=page, per_page=per_page, headers=headers)
+                    data = _bcorp_search_page(
+                        page=page,
+                        per_page=per_page,
+                        headers=headers,
+                        filter_by=active_filter,
+                    )
                     break
                 except Exception as exc:  # noqa: BLE001
                     if attempt >= 2:
@@ -359,12 +503,15 @@ def collect_from_bcorp(
                     "last_completed_page": page,
                     "total_pages": total_pages,
                     "found": found,
+                    "filter_by": active_filter,
                     "seen_ids": sorted(seen_ids),
                 },
             )
             if page % 5 == 0 or page == total_pages:
                 logger.info("B Corp pages %s/%s; candidates=%s", page, total_pages, len(out))
             time.sleep(delay)
+    if not out and output_jsonl_path.exists():
+        return _load_bcorp_candidates_from_jsonl(output_jsonl_path)
     logger.info("B Corp: %s employers (found=%s)", len(out), found)
     return out
 
@@ -399,6 +546,13 @@ def collect_all(
             _merge(merged, v)
     if "seeds" in wanted:
         for k, v in collect_from_seeds(seeds_path).items():
+            _merge(merged, v)
+    if "eu_mission_tech" in wanted or "eu_seeds" in wanted:
+        for k, v in collect_from_seeds(
+            EU_MISSION_TECH_SEEDS_PATH,
+            discovery_source="eu_mission_tech",
+            default_mission_category="eu_mission_tech",
+        ).items():
             _merge(merged, v)
     if "bcorp" in wanted:
         try:

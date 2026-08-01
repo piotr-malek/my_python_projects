@@ -53,6 +53,9 @@ def test_jobs_for_digest_unsent_only(tmp_path):
         remote_ok=True,
         combined=80.0,
         llm_payload={"one_line_summary": "ok"},
+        eu_hire_ok=True,
+        timezone_ok=True,
+        seniority_ok=True,
     )
     all_rows = repo.jobs_for_digest(min_combined=50, remote_only=False, unsent_only=False)
     assert len(all_rows) == 1
@@ -92,9 +95,49 @@ def test_jobs_for_digest_min_combined_zero_includes_low_scores(tmp_path):
         remote_ok=False,
         combined=10.0,
         llm_payload={"one_line_summary": "weak"},
+        eu_hire_ok=True,
+        timezone_ok=True,
+        seniority_ok=True,
     )
     assert len(repo.jobs_for_digest(min_combined=0, remote_only=False)) == 1
     assert len(repo.jobs_for_digest(min_combined=50, remote_only=False)) == 0
+    assert len(repo.jobs_for_digest(min_combined=0, remote_only=False, min_fit=40)) == 0
+    assert len(repo.jobs_for_digest(min_combined=0, remote_only=True)) == 0
+
+
+def test_jobs_for_digest_requires_fit_booleans(tmp_path):
+    """Rows scored before the fit booleans existed (NULL) stay out of the digest."""
+    repo = JobRepository(tmp_path / "legacy.db")
+    repo.init_db()
+    jid, _ = repo.upsert_job(
+        company_name="Co",
+        mission_category=None,
+        ats_type="greenhouse",
+        ats_slug="co",
+        source="greenhouse",
+        source_job_id="7",
+        title="Data Engineer",
+        url="http://u",
+        location_text=None,
+        is_remote=True,
+        salary_text=None,
+        description_text="x",
+        chash=content_hash("x"),
+        now_iso="2026-05-28T12:00:00+00:00",
+    )
+    repo.set_prefilter(jid, True)
+    repo.save_score(
+        jid,
+        relevance=90,
+        mission=90,
+        fit=90,
+        remote_ok=True,
+        combined=90.0,
+        llm_payload={},
+    )
+    assert len(repo.jobs_for_digest(min_combined=0, remote_only=False)) == 0
+    # ...and they are queued for rescoring so the booleans get populated.
+    assert len(repo.jobs_needing_score()) == 1
 
 
 def test_build_digest_unsent_wording():

@@ -15,6 +15,7 @@ class CompanyRow:
     poll_enabled: bool = True
     mission_category: str | None = "mission"
     notes: str = ""
+    last_validated_at: str | None = None
 
 
 def effective_poll_enabled(row: CompanyRow, overrides: dict[str, bool]) -> bool:

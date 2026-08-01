@@ -76,8 +76,11 @@ def _attempt_fetchers() -> tuple[str, int, str]:
         ("httpx", _fetch_with_httpx),
         ("cloudscraper", _fetch_with_cloudscraper),
         ("curl_cffi", _fetch_with_curl_cffi),
-        ("playwright", _fetch_with_playwright),
     ]
+    # Browser automation is pointless from a CI datacenter IP (Cloudflare blocks it
+    # anyway) and each attempt costs 90s of timeout, so skip it there.
+    if not os.getenv("CI"):
+        strategies.append(("playwright", _fetch_with_playwright))
     errors: list[str] = []
     for name, fn in strategies:
         try:

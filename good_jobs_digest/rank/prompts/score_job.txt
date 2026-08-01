@@ -8,8 +8,6 @@ Job context:
 - Title: {title}
 - Location / workplace notes: {location_text}
 - Heuristic remote flag (may be wrong): {is_remote}
-- Detected location constraints (automated — trust over generic "remote" flags):
-{location_analysis}
 - Salary hint if any: {salary_text}
 - Title prefilter keywords (already matched at least one): {target_keywords}
 
@@ -21,9 +19,9 @@ Job description (truncated):
 Scoring rules (apply strictly against structured requirements above):
 
 role_relevance (0–100):
-- 85–100: Title and description clearly match a PRIMARY role family; hands-on data/analytics/ML/AI engineering work is central.
+- 85–100: Title and description clearly match a PRIMARY role family; hands-on data/analytics/AI engineering work is central.
 - 60–84: Good match to a SECONDARY role family, or primary family with mixed responsibilities.
-- 40–59: Partial overlap (e.g. adjacent role, heavy management, or platform ops with little analytics/ML).
+- 40–59: Partial overlap (e.g. adjacent role, heavy management, or platform ops with little analytics work).
 - 0–39: Matches AVOID list, generic SWE/IT, or little connection to stated role families despite title keyword.
 
 mission_alignment (0–100):
@@ -39,13 +37,26 @@ candidate_fit (0–100):
 - 40–59: Significant seniority or skills mismatch.
 - 0–39: Clearly wrong level, wrong stack, or conflicts with organization/deal-breaker preferences.
 
+Fit checks — read the FULL posting (title, location line, description) and decide each boolean strictly. The candidate is an EU citizen based in the EU (CET) who can only work fully remote:
+
 remote_ok (boolean):
-- "Remote" in a country-specific form (e.g. "United States (Remote)", "Remote - US only") means the hire must be BASED in that country — NOT eligible for an EU-based candidate unless explicitly stated otherwise.
-- Plain "Remote" or no location stated: acceptable per candidate preferences (unspecified location OK).
-- Work-from-anywhere / global / worldwide remote: strongly preferred — remote_ok=true when work arrangement rules are satisfied.
-- Trust "Detected location constraints" above over the heuristic remote flag.
-- true if work arrangement rules are satisfied AND (hire region is EU, location is unspecified, OR posting is globally remote).
-- false if stated region is US/UK-only (non-EU), US work authorization is required, relocation required, US-only hours, or automated check flags incompatibility.
+- true only if the job can be done fully remote. On-site or hybrid requirements (any required office days, "X days per week in office", relocation) → false, unless a fully-remote alternative is explicitly offered.
+- Plain "Remote" or no stated location: true (unspecified is acceptable per requirements).
+
+eu_hire_ok (boolean):
+- true if the employer can hire someone based in the EU: hire region includes the EU/Europe or an EU country, the role is global/work-from-anywhere, or no hire region is stated.
+- false if the posting restricts hiring to a non-EU region (e.g. "Remote — US only", "United States (Remote)", US city with no remote option, "must be based in the US/UK/Canada"), requires US work authorization, or requires relocation outside the EU.
+- Watch for compensation/benefits/eligibility notes written only for US employees combined with US-only language.
+
+timezone_ok (boolean):
+- true if working hours are compatible with European business hours (roughly 09:00–17:00 CET): European/EMEA hours, flexible/async hours, global team, or nothing stated.
+- false if the role requires US business hours or substantial US-timezone overlap (e.g. "EST/PST working hours", "core hours 9–5 Eastern", "must overlap 6+ hours with US team").
+
+seniority_ok (boolean):
+- true if the required level matches the target/acceptable seniority in the requirements (mid-level; junior acceptable).
+- false if the role is clearly above it (senior/staff/principal/lead/head/management, or requires far more years of experience than the candidate has) or below it (internship/graduate scheme).
+
+fit_reasons: up to 3 short strings explaining any false fit-check boolean (empty array when all true).
 
 Other fields:
 - extracted_salary: short string if comp stated, else null. Compare to minimum in requirements when scoring risks.
@@ -53,4 +64,4 @@ Other fields:
 - risks_or_gaps: up to 5 short strings (seniority, visa, hybrid, comp below minimum, stack gaps, deal-breakers).
 - one_line_summary: single punchy line for the digest.
 
-Be conservative: missing information → lower scores and explain in risks_or_gaps.
+Be conservative on scores when information is missing and explain in risks_or_gaps — but for the fit-check booleans, missing information means "no restriction stated" (see each rule above).

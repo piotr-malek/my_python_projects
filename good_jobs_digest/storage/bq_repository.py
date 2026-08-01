@@ -1,9 +1,10 @@
-"""BigQuery: raw API payloads, normalized job mirror, LLM score audit trail."""
+"""BigQuery: curated employer registry (read) + normalized job mirror (batch load)."""
 
 from __future__ import annotations
 
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 from core.env import strip_env_path as _strip_env_path
+
+
+def _bq_ts_iso(value: Any) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return str(value)
 
 
 def _bq_client(project: str):
@@ -45,7 +54,7 @@ def _bq_client(project: str):
 
 
 class JobBigQuery:
-    """Write fetches + normalized rows to BQ; read normalized text for LLM scoring."""
+    """Read curated_companies; batch-load jobs_normalized (no streaming inserts by default)."""
 
     def __init__(self, settings):
         self._settings = settings
@@ -55,6 +64,84 @@ class JobBigQuery:
         self._normalized_buffer: list[tuple[dict[str, Any], str]] = []
         self._llm_score_buffer: list[dict[str, Any]] = []
         self._batch_chunk = int(getattr(settings, "BQ_BATCH_CHUNK_SIZE", 50) or 50)
+        self._job_timeout = float(getattr(settings, "BQ_JOB_TIMEOUT_SECONDS", 120) or 0)
+
+    def _await(self, job, *, what: str = "BigQuery job"):
+        """Wait for a job, but never forever.
+
+        google-cloud-bigquery blocks indefinitely by default, so a dropped socket
+        hangs the whole run — which is fatal for an unattended scheduled job.
+        On timeout we cancel and raise; callers already treat BQ failures as
+        non-fatal and fall back to local state.
+        """
+        if not self._job_timeout:
+            return job.result()
+        try:
+            return job.result(timeout=self._job_timeout)
+        except Exception:
+            try:
+                job.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning("%s exceeded %ss — cancelled", what, self._job_timeout)
+            raise
+
+    def _write_jobs(self) -> bool:
+        return bool(getattr(self._settings, "BQ_WRITE_JOBS", True))
+
+    def _write_raw_payloads(self) -> bool:
+        return bool(getattr(self._settings, "BQ_WRITE_RAW_PAYLOADS", False))
+
+    def _write_llm_scores(self) -> bool:
+        return bool(getattr(self._settings, "BQ_WRITE_LLM_SCORES", False))
+
+    def _write_digest_history(self) -> bool:
+        return bool(getattr(self._settings, "BQ_WRITE_DIGEST_HISTORY", False))
+
+    def _append_rows_load(self, table_name: str, rows: list[dict[str, Any]]) -> None:
+        """Append rows via a load job (not billed as Streaming Insert)."""
+        if not rows:
+            return
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )
+        load_job = self.client.load_table_from_json(
+            rows,
+            self.table_id(table_name),
+            job_config=job_config,
+            location=self._settings.BQ_LOCATION,
+        )
+        self._await(load_job, what='load job')
+        if load_job.error_result or load_job.errors:
+            logger.warning(
+                "BQ load append to %s failed (%s rows): %s",
+                table_name,
+                len(rows),
+                load_job.error_result or load_job.errors,
+            )
+
+    @staticmethod
+    def _normalized_staging_row(job: dict[str, Any], *, ingested_at: str) -> dict[str, Any]:
+        return {
+            "source": job["source"],
+            "ats_slug": job["ats_slug"],
+            "source_job_id": job["source_job_id"],
+            "sqlite_job_id": int(job["id"]),
+            "company_name": job["company_name"],
+            "mission_category": job.get("mission_category"),
+            "title": job["title"],
+            "url": job["url"],
+            "location_text": job.get("location_text"),
+            "is_remote": bool(job.get("is_remote")),
+            "salary_text": job.get("salary_text"),
+            "description_text": job["description_text"],
+            "content_hash": job["content_hash"],
+            "prefilter_pass": int(job.get("prefilter_pass") or 0),
+            "first_seen_at": job["first_seen_at"],
+            "last_seen_at": job["last_seen_at"],
+            "last_changed_at": job["last_changed_at"],
+            "ingested_at": ingested_at,
+        }
 
     @property
     def enabled(self) -> bool:
@@ -170,16 +257,50 @@ CREATE TABLE IF NOT EXISTS {self.fqtn("curated_companies")}
 (
   company_name STRING NOT NULL,
   job_board_url STRING NOT NULL,
-  added_at TIMESTAMP NOT NULL
+  added_at TIMESTAMP NOT NULL,
+  discovery_source STRING,
+  mission_category STRING,
+  ats_type STRING,
+  ats_slug STRING,
+  ats_region STRING,
+  careers_url STRING,
+  last_validated_at TIMESTAMP
 )
 PARTITION BY DATE(added_at)
-CLUSTER BY company_name
+CLUSTER BY company_name, ats_type, ats_slug
 """,
         ]
         for stmt in ddl_statements:
             job = self.client.query(stmt.strip(), location=self._settings.BQ_LOCATION)
-            job.result()
+            self._await(job, what='query job')
+        self._migrate_curated_companies_columns()
         logger.info("BigQuery tables ensured in %s", self.table_id("jobs_normalized").rsplit(".", 1)[0])
+
+    def _migrate_curated_companies_columns(self) -> None:
+        """Add metadata columns to existing curated_companies tables."""
+        table = self.table_id("curated_companies")
+        try:
+            existing = {f.name for f in self.client.get_table(table).schema}
+        except Exception:
+            return
+        alters = []
+        for col, typ in (
+            ("discovery_source", "STRING"),
+            ("mission_category", "STRING"),
+            ("ats_type", "STRING"),
+            ("ats_slug", "STRING"),
+            ("ats_region", "STRING"),
+            ("careers_url", "STRING"),
+            ("last_validated_at", "TIMESTAMP"),
+        ):
+            if col not in existing:
+                alters.append(f"ADD COLUMN {col} {typ}")
+        if not alters:
+            return
+        sql = f"ALTER TABLE {self.fqtn('curated_companies')} {', '.join(alters)}"
+        job = self.client.query(sql, location=self._settings.BQ_LOCATION)
+        self._await(job, what='query job')
+        logger.info("Migrated curated_companies schema (%s)", ", ".join(alters))
 
     def verify_tables(self) -> list[str]:
         """Return table IDs after ensure_tables (raises if any missing)."""
@@ -210,14 +331,14 @@ CLUSTER BY company_name
         ]
 
     def flush_raw_payloads(self) -> None:
-        """Flush buffered raw API rows (call at end of ingest)."""
-        if not self._raw_buffer:
+        """Flush buffered raw API rows via load job (call at end of ingest)."""
+        if not self._write_raw_payloads() or not self._raw_buffer:
+            self._raw_buffer = []
             return
         batch = self._raw_buffer
         self._raw_buffer = []
-        errors = self.client.insert_rows_json(self.table_id("raw_api_payloads"), batch)
-        if errors:
-            logger.warning("BQ raw insert errors (%s rows): %s", len(batch), errors)
+        self._append_rows_load("raw_api_payloads", batch)
+        logger.info("BQ loaded %s raw_api_payloads rows", len(batch))
 
     def insert_raw_payload(
         self,
@@ -233,6 +354,8 @@ CLUSTER BY company_name
         payload_kind: str,
         payload: Any,
     ) -> None:
+        if not self._write_raw_payloads():
+            return
         row = {
             "fetched_at": fetched_at,
             "ingest_batch_id": ingest_batch_id,
@@ -256,63 +379,39 @@ CLUSTER BY company_name
             self.flush_normalized_jobs()
 
     def flush_normalized_jobs(self) -> None:
-        if not self._normalized_buffer:
+        if not self._write_jobs() or not self._normalized_buffer:
+            self._normalized_buffer = []
             return
         batch = self._normalized_buffer
         self._normalized_buffer = []
+        rows = [
+            self._normalized_staging_row(job, ingested_at=ingested_at)
+            for job, ingested_at in batch
+        ]
         ok = 0
-        for job, ingested_at in batch:
+        for i in range(0, len(rows), self._batch_chunk):
+            chunk = rows[i : i + self._batch_chunk]
             try:
-                self.merge_normalized_job(job, ingested_at=ingested_at)
-                ok += 1
+                self._merge_normalized_batch(chunk)
+                ok += len(chunk)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("BQ normalized merge failed for job %s: %s", job.get("id"), exc)
+                logger.warning("BQ normalized batch merge failed (%s rows): %s", len(chunk), exc)
         logger.info("BQ flushed %s/%s normalized jobs", ok, len(batch))
 
-    def queue_llm_score(self, row: dict[str, Any]) -> None:
-        self._llm_score_buffer.append(row)
-        if len(self._llm_score_buffer) >= self._batch_chunk:
-            self.flush_llm_scores()
-
-    def flush_llm_scores(self) -> None:
-        if not self._llm_score_buffer:
-            return
-        batch = self._llm_score_buffer
-        self._llm_score_buffer = []
-        errors = self.client.insert_rows_json(self.table_id("llm_score_events"), batch)
-        if errors:
-            logger.warning("BQ llm_score batch insert errors (%s rows): %s", len(batch), errors)
-        else:
-            logger.info("BQ flushed %s llm_score_events", len(batch))
-
-    def merge_normalized_job(self, job: dict[str, Any], *, ingested_at: str) -> None:
-        """Upsert one row in jobs_normalized (expects SQLite jobs row as dict)."""
-        is_remote = bool(job.get("is_remote"))
-        prefilter = int(job.get("prefilter_pass") or 0)
-        mission = job.get("mission_category")
+    def _merge_normalized_batch(self, rows: list[dict[str, Any]]) -> None:
+        tmp_name = f"_jobs_staging_{uuid.uuid4().hex[:12]}"
+        tmp_table = self.table_id(tmp_name)
+        load_job = self.client.load_table_from_json(
+            rows,
+            tmp_table,
+            location=self._settings.BQ_LOCATION,
+        )
+        self._await(load_job, what='load job')
+        if load_job.error_result or load_job.errors:
+            raise RuntimeError(load_job.error_result or load_job.errors)
         sql = f"""
 MERGE {self.fqtn("jobs_normalized")} T
-USING (
-  SELECT
-    @source AS source,
-    @ats_slug AS ats_slug,
-    @source_job_id AS source_job_id,
-    @sqlite_job_id AS sqlite_job_id,
-    @company_name AS company_name,
-    @mission_category AS mission_category,
-    @title AS title,
-    @url AS url,
-    @location_text AS location_text,
-    @is_remote AS is_remote,
-    @salary_text AS salary_text,
-    @description_text AS description_text,
-    @content_hash AS content_hash,
-    @prefilter_pass AS prefilter_pass,
-    TIMESTAMP(@first_seen_at) AS first_seen_at,
-    TIMESTAMP(@last_seen_at) AS last_seen_at,
-    TIMESTAMP(@last_changed_at) AS last_changed_at,
-    TIMESTAMP(@ingested_at) AS ingested_at
-) S
+USING {self.fqtn(tmp_name)} S
 ON T.source = S.source AND T.ats_slug = S.ats_slug AND T.source_job_id = S.source_job_id
 WHEN MATCHED THEN
   UPDATE SET
@@ -327,10 +426,10 @@ WHEN MATCHED THEN
     description_text = S.description_text,
     content_hash = S.content_hash,
     prefilter_pass = S.prefilter_pass,
-    first_seen_at = S.first_seen_at,
-    last_seen_at = S.last_seen_at,
-    last_changed_at = S.last_changed_at,
-    ingested_at = S.ingested_at
+    first_seen_at = TIMESTAMP(S.first_seen_at),
+    last_seen_at = TIMESTAMP(S.last_seen_at),
+    last_changed_at = TIMESTAMP(S.last_changed_at),
+    ingested_at = TIMESTAMP(S.ingested_at)
 WHEN NOT MATCHED THEN
   INSERT (
     source, ats_slug, source_job_id, sqlite_job_id, company_name, mission_category,
@@ -340,35 +439,33 @@ WHEN NOT MATCHED THEN
   VALUES (
     S.source, S.ats_slug, S.source_job_id, S.sqlite_job_id, S.company_name, S.mission_category,
     S.title, S.url, S.location_text, S.is_remote, S.salary_text, S.description_text, S.content_hash,
-    S.prefilter_pass, S.first_seen_at, S.last_seen_at, S.last_changed_at, S.ingested_at
+    S.prefilter_pass, TIMESTAMP(S.first_seen_at), TIMESTAMP(S.last_seen_at),
+    TIMESTAMP(S.last_changed_at), TIMESTAMP(S.ingested_at)
   )
 """
-        params = [
-            ScalarQueryParameter("source", "STRING", job["source"]),
-            ScalarQueryParameter("ats_slug", "STRING", job["ats_slug"]),
-            ScalarQueryParameter("source_job_id", "STRING", job["source_job_id"]),
-            ScalarQueryParameter("sqlite_job_id", "INT64", int(job["id"])),
-            ScalarQueryParameter("company_name", "STRING", job["company_name"]),
-            ScalarQueryParameter("mission_category", "STRING", mission),
-            ScalarQueryParameter("title", "STRING", job["title"]),
-            ScalarQueryParameter("url", "STRING", job["url"]),
-            ScalarQueryParameter("location_text", "STRING", job.get("location_text")),
-            ScalarQueryParameter("is_remote", "BOOL", is_remote),
-            ScalarQueryParameter("salary_text", "STRING", job.get("salary_text")),
-            ScalarQueryParameter("description_text", "STRING", job["description_text"]),
-            ScalarQueryParameter("content_hash", "STRING", job["content_hash"]),
-            ScalarQueryParameter("prefilter_pass", "INT64", prefilter),
-            ScalarQueryParameter("first_seen_at", "STRING", job["first_seen_at"]),
-            ScalarQueryParameter("last_seen_at", "STRING", job["last_seen_at"]),
-            ScalarQueryParameter("last_changed_at", "STRING", job["last_changed_at"]),
-            ScalarQueryParameter("ingested_at", "STRING", ingested_at),
-        ]
-        job_q = self.client.query(
-            sql,
-            job_config=bigquery.QueryJobConfig(query_parameters=params),
-            location=self._settings.BQ_LOCATION,
-        )
-        job_q.result()
+        job = self.client.query(sql, location=self._settings.BQ_LOCATION)
+        self._await(job, what='query job')
+        self.client.delete_table(tmp_table, not_found_ok=True)
+
+    def queue_llm_score(self, row: dict[str, Any]) -> None:
+        self._llm_score_buffer.append(row)
+        if len(self._llm_score_buffer) >= self._batch_chunk:
+            self.flush_llm_scores()
+
+    def flush_llm_scores(self) -> None:
+        if not self._write_llm_scores() or not self._llm_score_buffer:
+            self._llm_score_buffer = []
+            return
+        batch = self._llm_score_buffer
+        self._llm_score_buffer = []
+        self._append_rows_load("llm_score_events", batch)
+        logger.info("BQ loaded %s llm_score_events", len(batch))
+
+    def merge_normalized_job(self, job: dict[str, Any], *, ingested_at: str) -> None:
+        """Upsert one row in jobs_normalized (expects SQLite jobs row as dict)."""
+        if not self._write_jobs():
+            return
+        self._merge_normalized_batch([self._normalized_staging_row(job, ingested_at=ingested_at)])
 
     def fetch_for_scoring(self, source: str, ats_slug: str, source_job_id: str) -> dict[str, Any] | None:
         sql = f"""
@@ -390,7 +487,7 @@ WHEN NOT MATCHED THEN
             ),
             location=self._settings.BQ_LOCATION,
         )
-        rows = list(job.result())
+        rows = list(self._await(job, what='query job'))
         if not rows:
             return None
         r = rows[0]
@@ -421,6 +518,8 @@ WHEN NOT MATCHED THEN
         llm_json: str,
         scored_at: str,
     ) -> None:
+        if not self._write_llm_scores():
+            return
         row = {
             "scored_at": scored_at,
             "sqlite_job_id": sqlite_job_id,
@@ -438,19 +537,19 @@ WHEN NOT MATCHED THEN
         if getattr(self._settings, "BQ_BATCH_LLM_SCORES", True):
             self.queue_llm_score(row)
             return
-        errors = self.client.insert_rows_json(self.table_id("llm_score_events"), [row])
-        if errors:
-            logger.warning("BQ llm_score insert errors: %s", errors)
+        self._append_rows_load("llm_score_events", [row])
 
     def fetch_sent_job_keys(self) -> set[tuple[str, str, str]]:
         """Job identities already included in a prior digest email."""
+        if not self._write_digest_history():
+            return set()
         query = f"""
             SELECT DISTINCT source, ats_slug, source_job_id
             FROM `{self.table_id("selected_digest_jobs")}`
             """
         try:
             job = self.client.query(query, location=self._settings.BQ_LOCATION)
-            rows = job.result()
+            rows = self._await(job, what='query job')
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not load sent digest keys from BQ: %s", exc)
             return set()
@@ -460,7 +559,7 @@ WHEN NOT MATCHED THEN
         }
 
     def append_selected_jobs(self, *, digest_date: str, selected_at: str, rows: list[dict[str, Any]]) -> None:
-        if not rows:
+        if not self._write_digest_history() or not rows:
             return
         payload = []
         for r in rows:
@@ -480,9 +579,7 @@ WHEN NOT MATCHED THEN
                     "llm_json": r.get("llm_json"),
                 }
             )
-        errors = self.client.insert_rows_json(self.table_id("selected_digest_jobs"), payload)
-        if errors:
-            logger.warning("BQ selected_digest_jobs insert errors: %s", errors)
+        self._append_rows_load("selected_digest_jobs", payload)
 
     def insert_curated_companies(self, rows: list[dict[str, str]], *, added_at: str) -> int:
         """Insert new purpose-driven employers; skip URLs already present (keeps first added_at)."""
@@ -492,7 +589,7 @@ WHEN NOT MATCHED THEN
         seen_urls: set[str] = set()
         payload: list[dict[str, str]] = []
         for row in rows:
-            url = (row.get("job_board_url") or "").strip()
+            url = (row.get("job_board_url") or row.get("careers_url") or "").strip()
             name = (row.get("company_name") or "").strip()
             if not name or not url:
                 continue
@@ -505,6 +602,13 @@ WHEN NOT MATCHED THEN
                     "company_name": name,
                     "job_board_url": url,
                     "added_at": added_at,
+                    "discovery_source": (row.get("discovery_source") or "").strip() or None,
+                    "mission_category": (row.get("mission_category") or "mission").strip(),
+                    "ats_type": (row.get("ats_type") or "").strip() or None,
+                    "ats_slug": (row.get("ats_slug") or "").strip() or None,
+                    "ats_region": (row.get("ats_region") or "global").strip() or "global",
+                    "careers_url": url,
+                    "last_validated_at": added_at,
                 }
             )
 
@@ -528,17 +632,14 @@ WHEN NOT MATCHED THEN
                 ),
                 location=self._settings.BQ_LOCATION,
             )
-            existing.update((r["job_board_url"] or "").lower() for r in job.result())
+            existing.update((r["job_board_url"] or "").lower() for r in self._await(job, what='query job'))
 
         new_rows = [r for r in payload if r["job_board_url"].lower() not in existing]
         if not new_rows:
             logger.info("curated_companies: all %s rows already in BQ", len(payload))
             return 0
 
-        errors = self.client.insert_rows_json(self.table_id("curated_companies"), new_rows)
-        if errors:
-            logger.warning("BQ curated_companies insert errors: %s", errors)
-            return 0
+        self._append_rows_load("curated_companies", new_rows)
         logger.info("Inserted %s rows into curated_companies (%s skipped as duplicates)", len(new_rows), len(payload) - len(new_rows))
         return len(new_rows)
 
@@ -550,7 +651,7 @@ WHEN NOT MATCHED THEN
         WHERE company_name IS NOT NULL AND TRIM(company_name) != ""
         """
         job = self.client.query(sql, location=self._settings.BQ_LOCATION)
-        return {str(r["company_name"] or "").strip() for r in job.result() if str(r["company_name"] or "").strip()}
+        return {str(r["company_name"] or "").strip() for r in self._await(job, what='query job') if str(r["company_name"] or "").strip()}
 
     def delete_curated_companies(self, job_board_urls: list[str]) -> int:
         """Delete curated_companies rows by job_board_url (exact match)."""
@@ -573,15 +674,24 @@ WHEN NOT MATCHED THEN
                 ),
                 location=self._settings.BQ_LOCATION,
             )
-            job.result()
+            self._await(job, what='query job')
             deleted += int(job.num_dml_affected_rows or 0)
         logger.info("Deleted %s row(s) from curated_companies", deleted)
         return deleted
 
     def fetch_curated_companies(self, *, limit: int | None = None) -> list[dict[str, str]]:
-        """Return company_name + job_board_url rows for ATS ingest."""
+        """Return curated registry rows for ATS ingest."""
         sql = f"""
-        SELECT company_name, job_board_url
+        SELECT
+          company_name,
+          job_board_url,
+          discovery_source,
+          mission_category,
+          ats_type,
+          ats_slug,
+          ats_region,
+          COALESCE(careers_url, job_board_url) AS careers_url,
+          last_validated_at
         FROM {self.fqtn("curated_companies")}
         WHERE job_board_url IS NOT NULL AND TRIM(job_board_url) != ""
         ORDER BY added_at DESC
@@ -593,6 +703,180 @@ WHEN NOT MATCHED THEN
             {
                 "company_name": str(r["company_name"] or ""),
                 "job_board_url": str(r["job_board_url"] or ""),
+                "discovery_source": str(r.get("discovery_source") or ""),
+                "mission_category": str(r.get("mission_category") or "mission"),
+                "ats_type": str(r.get("ats_type") or ""),
+                "ats_slug": str(r.get("ats_slug") or ""),
+                "ats_region": str(r.get("ats_region") or "global"),
+                "careers_url": str(r.get("careers_url") or r["job_board_url"] or ""),
+                "last_validated_at": _bq_ts_iso(r.get("last_validated_at")),
             }
-            for r in job.result()
+            for r in self._await(job, what='query job')
         ]
+
+    def touch_curated_last_validated(
+        self,
+        ats_type: str,
+        ats_slug: str,
+        *,
+        validated_at: str,
+    ) -> None:
+        """Record that a curated employer board was polled."""
+        sql = f"""
+        UPDATE {self.fqtn("curated_companies")}
+        SET last_validated_at = @validated_at
+        WHERE LOWER(ats_type) = LOWER(@ats_type) AND LOWER(ats_slug) = LOWER(@ats_slug)
+        """
+        job = self.client.query(
+            sql,
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("validated_at", "TIMESTAMP", validated_at),
+                    bigquery.ScalarQueryParameter("ats_type", "STRING", ats_type),
+                    bigquery.ScalarQueryParameter("ats_slug", "STRING", ats_slug),
+                ]
+            ),
+            location=self._settings.BQ_LOCATION,
+        )
+        self._await(job, what='query job')
+
+    def touch_curated_last_validated_batch(
+        self,
+        pairs: list[tuple[str, str]],
+        *,
+        validated_at: str,
+    ) -> int:
+        """Stamp many curated boards as polled in a single UPDATE.
+
+        BigQuery permits only a couple of concurrent mutating statements per table,
+        so one UPDATE per employer from a thread pool mostly ends in
+        "could not serialize access" retries. One statement per run avoids that
+        entirely (and is far cheaper).
+        """
+        if not pairs:
+            return 0
+        keys = [f"{a.lower()}:{s.lower()}" for a, s in pairs if a and s]
+        if not keys:
+            return 0
+        sql = f"""
+        UPDATE {self.fqtn("curated_companies")}
+        SET last_validated_at = @validated_at
+        WHERE CONCAT(LOWER(ats_type), ':', LOWER(ats_slug)) IN UNNEST(@keys)
+        """
+        job = self.client.query(
+            sql,
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("validated_at", "TIMESTAMP", validated_at),
+                    bigquery.ArrayQueryParameter("keys", "STRING", keys),
+                ]
+            ),
+            location=self._settings.BQ_LOCATION,
+        )
+        self._await(job, what='query job')
+        return int(job.num_dml_affected_rows or 0)
+
+    def update_curated_company_board(
+        self,
+        company_name: str,
+        *,
+        ats_type: str,
+        ats_slug: str,
+        ats_region: str,
+        careers_url: str,
+        job_board_url: str,
+        validated_at: str,
+    ) -> int:
+        """Update ATS metadata for an existing curated employer (revalidation)."""
+        sql = f"""
+        UPDATE {self.fqtn("curated_companies")}
+        SET
+          ats_type = @ats_type,
+          ats_slug = @ats_slug,
+          ats_region = @ats_region,
+          careers_url = @careers_url,
+          job_board_url = @job_board_url,
+          last_validated_at = @validated_at
+        WHERE LOWER(company_name) = LOWER(@company_name)
+        """
+        job = self.client.query(
+            sql,
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("ats_type", "STRING", ats_type),
+                    bigquery.ScalarQueryParameter("ats_slug", "STRING", ats_slug),
+                    bigquery.ScalarQueryParameter("ats_region", "STRING", ats_region or "global"),
+                    bigquery.ScalarQueryParameter("careers_url", "STRING", careers_url),
+                    bigquery.ScalarQueryParameter("job_board_url", "STRING", job_board_url),
+                    bigquery.ScalarQueryParameter("validated_at", "TIMESTAMP", validated_at),
+                    bigquery.ScalarQueryParameter("company_name", "STRING", company_name),
+                ]
+            ),
+            location=self._settings.BQ_LOCATION,
+        )
+        self._await(job, what='query job')
+        return int(job.num_dml_affected_rows or 0)
+
+    def update_curated_companies_from_matches(
+        self,
+        rows: list[dict[str, str]],
+        *,
+        validated_at: str,
+    ) -> int:
+        """Batch-update curated_companies ATS fields after revalidation."""
+        payloads: list[dict[str, str]] = []
+        for row in rows:
+            name = (row.get("company_name") or "").strip()
+            board_url = (row.get("job_board_url") or row.get("careers_url") or "").strip()
+            ats_type = (row.get("ats_type") or "").strip()
+            ats_slug = (row.get("ats_slug") or "").strip()
+            if not name or not board_url or not ats_type or not ats_slug:
+                continue
+            payloads.append(
+                {
+                    "company_name": name,
+                    "ats_type": ats_type,
+                    "ats_slug": ats_slug,
+                    "ats_region": (row.get("ats_region") or "global").strip() or "global",
+                    "careers_url": board_url,
+                    "job_board_url": board_url,
+                }
+            )
+        if not payloads:
+            return 0
+
+        updated = 0
+        chunk_size = 200
+        for i in range(0, len(payloads), chunk_size):
+            chunk = payloads[i : i + chunk_size]
+            tmp_name = f"_curated_updates_{uuid.uuid4().hex[:12]}"
+            tmp_table = self.table_id(tmp_name)
+            load_job = self.client.load_table_from_json(
+                [
+                    {
+                        **row,
+                        "validated_at": validated_at,
+                    }
+                    for row in chunk
+                ],
+                tmp_table,
+            )
+            self._await(load_job, what='load job')
+            sql = f"""
+            MERGE {self.fqtn("curated_companies")} T
+            USING {self.fqtn(tmp_name)} S
+            ON LOWER(T.company_name) = LOWER(S.company_name)
+            WHEN MATCHED THEN UPDATE SET
+              ats_type = S.ats_type,
+              ats_slug = S.ats_slug,
+              ats_region = S.ats_region,
+              careers_url = S.careers_url,
+              job_board_url = S.job_board_url,
+              last_validated_at = TIMESTAMP(S.validated_at)
+            """
+            job = self.client.query(sql, location=self._settings.BQ_LOCATION)
+            self._await(job, what='query job')
+            updated += int(job.num_dml_affected_rows or 0)
+            self.client.delete_table(tmp_table, not_found_ok=True)
+        logger.info("Batch-updated %s curated_companies row(s)", updated)
+        return updated

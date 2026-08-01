@@ -8,3 +8,6 @@ jinja2==3.1.6
 beautifulsoup4==4.15.0
 html2text==2025.4.15
 pyyaml==6.0.3
+# Optional: Indeed ingest (pulls pandas + a pinned numpy). Omit to disable the
+# Indeed board — pipelines/job_boards/sources/jobspy_indeed.py degrades cleanly.
+python-jobspy==1.1.82

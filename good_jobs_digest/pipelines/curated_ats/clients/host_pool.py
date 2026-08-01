@@ -59,3 +59,19 @@ class HostRateLimitedHttp:
         finally:
             with self._host_lock(host):
                 self._last_end[host] = time.monotonic()
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def post(
+        self,
+        url: str,
+        *,
+        json: dict | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        host = urlparse(url).netloc or "default"
+        self._throttle(host)
+        try:
+            return self._client.post(url, json=json, headers=headers)
+        finally:
+            with self._host_lock(host):
+                self._last_end[host] = time.monotonic()

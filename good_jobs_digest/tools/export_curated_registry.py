@@ -35,6 +35,10 @@ def _from_progress(paths: list[Path]) -> list[dict[str, str]]:
                 "job_board_url": url,
                 "mission_category": (row.get("mission_category") or "mission").strip(),
                 "discovery_source": (row.get("discovery_source") or "discovery").strip(),
+                "ats_type": (row.get("ats_type") or "").strip(),
+                "ats_slug": (row.get("ats_slug") or "").strip(),
+                "ats_region": (row.get("ats_region") or "global").strip(),
+                "careers_url": (row.get("careers_url") or url).strip(),
             }
     return sorted(merged.values(), key=lambda r: r["company_name"].lower())
 

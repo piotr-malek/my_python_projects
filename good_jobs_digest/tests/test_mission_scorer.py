@@ -6,11 +6,12 @@ from unittest.mock import patch
 
 from config import Settings
 from discovery.mission_filter import EmployerMissionFilter
+from tests.stub_llm import StubLLM
 
 
 def test_score_employers_returns_all_with_scores():
     settings = Settings()
-    filt = EmployerMissionFilter(settings)
+    filt = EmployerMissionFilter(settings, llm=StubLLM())
     employers = [
         {
             "company_name": "GiveWell",
@@ -43,7 +44,7 @@ def test_score_employers_returns_all_with_scores():
             },
         ]
     }
-    with patch.object(filt, "_call_ollama", return_value=fake):
+    with patch.object(filt, "_call_llm", return_value=fake):
         scored = filt.score_employers(employers)
     assert len(scored) == 2
     by_name = {r["company_name"]: r for r in scored}

@@ -6,12 +6,13 @@ from unittest.mock import patch
 
 from config import Settings
 from discovery.mission_filter import EmployerMissionFilter
+from tests.stub_llm import StubLLM
 
 
 def test_filter_employers_keeps_above_threshold():
     settings = Settings()
     settings.MISSION_APPROVE_MIN_SCORE = 50
-    filt = EmployerMissionFilter(settings)
+    filt = EmployerMissionFilter(settings, llm=StubLLM())
     employers = [
         {
             "company_name": "GiveWell",
@@ -57,7 +58,7 @@ def test_filter_employers_keeps_above_threshold():
             },
         ]
     }
-    with patch.object(filt, "_call_ollama", return_value=fake):
+    with patch.object(filt, "_call_llm", return_value=fake):
         kept = filt.filter_employers(employers)
     assert len(kept) == 2
     names = {r["company_name"] for r in kept}
