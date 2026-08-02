@@ -388,6 +388,20 @@ CLUSTER BY company_name, ats_type, ats_slug
             self._normalized_staging_row(job, ingested_at=ingested_at)
             for job, ingested_at in batch
         ]
+        # BigQuery rejects an entire MERGE ("must match at most one source row for
+        # each target row") if two staged rows share the join key, so the same
+        # posting queued twice in one run would silently drop the whole batch.
+        # Keep the last occurrence — it carries the freshest last_seen_at.
+        deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in rows:
+            deduped[(row["source"], row["ats_slug"], row["source_job_id"])] = row
+        if len(deduped) != len(rows):
+            logger.info(
+                "BQ normalized batch: %s rows collapsed to %s unique job keys",
+                len(rows),
+                len(deduped),
+            )
+        rows = list(deduped.values())
         ok = 0
         for i in range(0, len(rows), self._batch_chunk):
             chunk = rows[i : i + self._batch_chunk]

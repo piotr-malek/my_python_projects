@@ -115,3 +115,42 @@ def test_proxy_pool_without_url_is_quiet(tmp_path):
     pool = ProxyPool(tmp_path / "nope.txt")
     assert pool.count == 0
     assert not pool
+
+
+def test_bq_normalized_batch_dedupes_merge_key():
+    """Two rows with the same (source, ats_slug, source_job_id) would make BigQuery
+    reject the whole MERGE, silently dropping every job in the batch."""
+    from unittest.mock import MagicMock
+
+    from storage.bq_repository import JobBigQuery
+
+    class _S:
+        BQ_ENABLED = True
+        BQ_WRITE_JOBS = True
+        BQ_PROJECT_ID = "p"
+        BQ_DATASET_ID = "d"
+        BQ_LOCATION = "US"
+        BQ_BATCH_CHUNK_SIZE = 50
+        BQ_RAW_BATCH_SIZE = 50
+        BQ_JOB_TIMEOUT_SECONDS = 5
+
+    bq = JobBigQuery(_S())
+    merged: list[list[dict]] = []
+    bq._merge_normalized_batch = lambda rows: merged.append(rows)
+
+    def _job(job_id: int, seen: str) -> dict:
+        return {
+            "id": job_id, "source": "indeed", "ats_slug": "indeed", "source_job_id": "dup-1",
+            "company_name": "Acme", "title": "Data Engineer", "url": "u", "is_remote": True,
+            "description_text": "d", "content_hash": "h", "prefilter_pass": 1,
+            "first_seen_at": "2026-08-01T00:00:00+00:00", "last_seen_at": seen,
+            "last_changed_at": seen,
+        }
+
+    bq.queue_normalized_job(_job(1, "2026-08-01T00:00:00+00:00"), ingested_at="2026-08-01T00:00:00+00:00")
+    bq.queue_normalized_job(_job(2, "2026-08-02T00:00:00+00:00"), ingested_at="2026-08-02T00:00:00+00:00")
+    bq.flush_normalized_jobs()
+
+    assert len(merged) == 1
+    assert len(merged[0]) == 1, "duplicate merge keys must be collapsed"
+    assert merged[0][0]["last_seen_at"] == "2026-08-02T00:00:00+00:00", "keeps the freshest row"
