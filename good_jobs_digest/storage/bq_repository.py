@@ -481,6 +481,55 @@ WHEN NOT MATCHED THEN
             return
         self._merge_normalized_batch([self._normalized_staging_row(job, ingested_at=ingested_at)])
 
+    def fetch_for_scoring_bulk(
+        self, keys: list[tuple[str, str, str]]
+    ) -> dict[tuple[str, str, str], dict[str, Any]]:
+        """Same as fetch_for_scoring, for many jobs in ONE query.
+
+        Called per job this was the single largest BigQuery cost in the pipeline:
+        every query is billed a 10 MiB minimum regardless of how little it reads,
+        so ~200 tiny lookups cost ~2 GiB a day. One query costs 10 MiB.
+        """
+        if not keys:
+            return {}
+        wanted = {f"{s}|{a}|{j}" for s, a, j in keys}
+        sql = f"""
+        SELECT source, ats_slug, source_job_id, company_name, mission_category, title, url,
+               location_text, is_remote, salary_text, description_text
+        FROM (
+          SELECT *, ROW_NUMBER() OVER (
+                   PARTITION BY source, ats_slug, source_job_id ORDER BY ingested_at DESC
+                 ) AS rn
+          FROM {self.fqtn("jobs_normalized")}
+          WHERE CONCAT(source, '|', ats_slug, '|', source_job_id) IN UNNEST(@keys)
+        )
+        WHERE rn = 1
+        """
+        job = self.client.query(
+            sql,
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ArrayQueryParameter("keys", "STRING", sorted(wanted))
+                ]
+            ),
+            location=self._settings.BQ_LOCATION,
+        )
+        out: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for r in self._await(job, what="query job"):
+            out[(r["source"], r["ats_slug"], r["source_job_id"])] = {
+                "company_name": r["company_name"] or "",
+                "mission_category": (r["mission_category"] or "")
+                if r["mission_category"] is not None
+                else "",
+                "title": r["title"] or "",
+                "url": r["url"] or "",
+                "location_text": r["location_text"],
+                "is_remote": bool(r["is_remote"]),
+                "salary_text": r["salary_text"],
+                "description_text": r["description_text"] or "",
+            }
+        return out
+
     def fetch_for_scoring(self, source: str, ats_slug: str, source_job_id: str) -> dict[str, Any] | None:
         sql = f"""
         SELECT company_name, mission_category, title, url, location_text, is_remote,

@@ -151,18 +151,22 @@ def cmd_score(args: argparse.Namespace) -> None:
         cap_note,
         age_note,
     )
-    jobs: list[dict] = []
-    for row in rows:
-        d = dict(row)
-        if bq:
-            bq_row = bq.fetch_for_scoring(
-                source=d["source"],
-                ats_slug=d["ats_slug"],
-                source_job_id=d["source_job_id"],
+    jobs: list[dict] = [dict(row) for row in rows]
+    if bq and jobs:
+        # One query for the whole batch: BigQuery bills a 10 MiB minimum per query,
+        # so a per-job lookup made scoring the pipeline's biggest BQ cost.
+        try:
+            enriched = bq.fetch_for_scoring_bulk(
+                [(j["source"], j["ats_slug"], j["source_job_id"]) for j in jobs]
             )
-            if bq_row:
-                d.update(bq_row)
-        jobs.append(d)
+            for j in jobs:
+                bq_row = enriched.get((j["source"], j["ats_slug"], j["source_job_id"]))
+                if bq_row:
+                    j.update(bq_row)
+            logger.info("BQ enrichment: %s/%s jobs matched (1 query)", len(enriched), len(jobs))
+        except Exception as exc:  # noqa: BLE001
+            # SQLite already holds these fields; enrichment is an optimisation.
+            logger.warning("BQ enrichment skipped (%s) — using local rows", exc)
 
     jobs = filter_jobs_by_employer_mission(jobs, repo=repo, settings=settings)
     jobs_by_id = {int(j["id"]): j for j in jobs}
