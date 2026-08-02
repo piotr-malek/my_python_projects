@@ -48,9 +48,9 @@ class Settings:
         self.GEMINI_USAGE_PATH = (ROOT / "data" / "gemini_usage.json").resolve()
         # Batching keeps the request count (and therefore the free-tier usage) low.
         self.LLM_SCORE_WORKERS = max(1, int(os.getenv("LLM_SCORE_WORKERS", "2")))
-        self.LLM_SCORE_BATCH_SIZE = max(1, int(os.getenv("LLM_SCORE_BATCH_SIZE", "5")))
+        self.LLM_SCORE_BATCH_SIZE = max(1, int(os.getenv("LLM_SCORE_BATCH_SIZE", "8")))
         self.LLM_DESC_TRUNCATE = int(os.getenv("LLM_DESC_TRUNCATE", "2000"))
-        self.LLM_MISSION_BATCH_SIZE = max(1, int(os.getenv("LLM_MISSION_BATCH_SIZE", "10")))
+        self.LLM_MISSION_BATCH_SIZE = max(1, int(os.getenv("LLM_MISSION_BATCH_SIZE", "20")))
         self.LLM_MISSION_WORKERS = max(1, int(os.getenv("LLM_MISSION_WORKERS", "2")))
         # Auto-approve curated employers at or above this mission_score (liberal default).
         self.MISSION_APPROVE_MIN_SCORE = max(0, min(100, int(os.getenv("MISSION_APPROVE_MIN_SCORE", "50"))))
