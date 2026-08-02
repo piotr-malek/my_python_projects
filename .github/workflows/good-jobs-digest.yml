@@ -109,6 +109,16 @@ jobs:
           python -c "import yaml,sys; yaml.safe_load(open('profile/preferences.yaml')) or sys.exit('preferences.yaml is empty')"
 
 
+      # A full run takes ~10 minutes; bad SMTP credentials should surface now,
+      # not after all that work. Skipped for dry runs, which never send.
+      - name: Verify SMTP credentials
+        if: ${{ inputs.dry_run != true }}
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python main.py check-email
+
       - name: Run pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

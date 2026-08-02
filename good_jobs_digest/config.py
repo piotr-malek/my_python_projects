@@ -66,6 +66,7 @@ class Settings:
         self.DIGEST_REMOTE_ONLY = _env_bool("DIGEST_REMOTE_ONLY", True)
         self.SMTP_HOST = _env("SMTP_HOST", "smtp.gmail.com")
         self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+        self.SMTP_TIMEOUT_SECONDS = float(os.getenv("SMTP_TIMEOUT_SECONDS", "30"))
         self.SMTP_USER = os.getenv("SMTP_USER") or ""
         self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or ""
         self.EMAIL_TO = os.getenv("EMAIL_TO") or ""

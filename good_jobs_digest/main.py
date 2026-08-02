@@ -333,6 +333,17 @@ def cmd_run_all(args: argparse.Namespace) -> None:
     cmd_digest(args)
 
 
+def cmd_check_email(args: argparse.Namespace) -> None:
+    """Authenticate against SMTP without sending, so bad credentials fail fast."""
+    from mail.mailer import JobDigestMailer
+
+    try:
+        JobDigestMailer(settings).verify_login()
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"SMTP check failed: {exc}") from exc
+    logger.info("SMTP login OK (%s → %s)", settings.SMTP_USER, settings.EMAIL_TO)
+
+
 def cmd_discover_candidates(args: argparse.Namespace) -> None:
     from discovery.discover_candidates import run_discover_candidates
 
@@ -362,6 +373,9 @@ def main() -> None:
     p_score = sub.add_parser("score", help="Prefiltered jobs → Ollama scores")
     p_score.add_argument("--max", type=int, default=None, metavar="N")
     p_score.set_defaults(func=cmd_score)
+
+    p_check = sub.add_parser("check-email", help="Verify SMTP credentials without sending")
+    p_check.set_defaults(func=cmd_check_email)
 
     p_digest = sub.add_parser("digest", help="Build ranked digest (two sections) and email")
     p_digest.add_argument("--dry-run-email", action="store_true")

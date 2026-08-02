@@ -20,9 +20,37 @@ class JobDigestMailer:
         tpl_path = Path(__file__).parent / "templates" / "digest.html"
         self._html_template = Template(tpl_path.read_text(encoding="utf-8"))
 
+    def verify_login(self) -> None:
+        """Authenticate without sending. Raises with an actionable message.
+
+        Called before the pipeline does its work so bad credentials surface in
+        seconds rather than after a full ingest+score cycle.
+        """
+        user = self._settings.SMTP_USER
+        password = self._settings.SMTP_PASSWORD
+        if not user or not password or not self._settings.EMAIL_TO:
+            raise RuntimeError("SMTP_USER, SMTP_PASSWORD and EMAIL_TO must all be set")
+        if password != password.strip() or password[:1] in {'"', "'"}:
+            raise RuntimeError(
+                "SMTP_PASSWORD is wrapped in quotes or padded with whitespace — "
+                "store the raw app password, without the quotes used in .env"
+            )
+        timeout = float(getattr(self._settings, "SMTP_TIMEOUT_SECONDS", 30) or 30)
+        with smtplib.SMTP(self._settings.SMTP_HOST, self._settings.SMTP_PORT, timeout=timeout) as server:
+            server.starttls()
+            try:
+                server.login(user, password)
+            except smtplib.SMTPAuthenticationError as exc:
+                raise RuntimeError(
+                    f"SMTP login rejected for {user} ({exc.smtp_code}). For Gmail this usually means "
+                    "the app password is wrong, has been revoked, or 2FA/app passwords are not enabled."
+                ) from exc
+
     def send(self, digest_text: str, *, digest_date: date, n_jobs: int) -> None:
         msg = self._build_message(digest_text, digest_date=digest_date, n_jobs=n_jobs)
-        with smtplib.SMTP(self._settings.SMTP_HOST, self._settings.SMTP_PORT) as server:
+        timeout = float(getattr(self._settings, "SMTP_TIMEOUT_SECONDS", 30) or 30)
+        # Without a timeout a wedged connection hangs the scheduled run forever.
+        with smtplib.SMTP(self._settings.SMTP_HOST, self._settings.SMTP_PORT, timeout=timeout) as server:
             server.starttls()
             server.login(self._settings.SMTP_USER, self._settings.SMTP_PASSWORD)
             server.sendmail(self._settings.SMTP_USER, [self._settings.EMAIL_TO], msg.as_string())
