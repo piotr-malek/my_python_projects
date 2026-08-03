@@ -61,11 +61,33 @@ def test_footer_flags_silent_sources(tmp_path):
         llm_usage={"used": 63, "budget": 800},
     )
     assert "Run health" in md
-    # Fetched-but-no-match is healthy; fetched-nothing is called out.
-    assert "| remotive | 34 | 0 |" in md
-    assert "Sources returning nothing" in md
-    assert "climatebase" in md.split("Sources returning nothing")[1]
+    # A markdown table would collapse into one line of pipes in both the plain-text
+    # part and the HTML converter, so the footer must not use one.
+    assert "|---" not in md
+    # Summary line, then the sources that actually contributed.
+    assert "**16 matches** from 402 postings across 3 sources." in md
+    assert "- **weworkremotely** — 16 of 368" in md
+    # Fetched-but-no-match is healthy and mentioned inline...
+    assert "No matches from remotive (fetched normally)." in md
+    # ...while fetched-nothing is called out separately as possible breakage.
+    assert "nothing came back" in md
+    assert "climatebase" in md.split("nothing came back")[1]
     assert "63/800" in md
+
+
+def test_footer_reads_as_bullets_in_html():
+    """The HTML part only renders headings, bullets and paragraphs."""
+    from mail.markdown_html import markdown_to_html
+
+    md = build_markdown_digest(
+        [], [], digest_date=date(2026, 8, 1),
+        source_stats=[{"source": "indeed", "fetched": 263, "passed": 42}],
+        llm_usage={"used": 2, "budget": 300},
+    )
+    html = markdown_to_html(md[md.index("### Run health"):])
+    assert "<h3>Run health</h3>" in html
+    assert "<li><strong>indeed</strong> — 42 of 263</li>" in html
+    assert "|" not in html
 
 
 def test_footer_omitted_without_data():

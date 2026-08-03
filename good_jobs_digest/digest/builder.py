@@ -40,20 +40,39 @@ def _health_footer(
     lines = ["---", "", "### Run health", ""]
     if source_stats:
         rows = [_row_dict(s) for s in source_stats]
+        # Markdown tables are not an option: the digest also goes out as plain text,
+        # and the HTML converter renders only headings, bullets and paragraphs — a
+        # table collapses into one long line of pipes.
         broken = [r for r in rows if r.get("error") or not int(r.get("fetched") or 0)]
-        healthy = [r for r in rows if r not in broken]
-        lines += ["| Source | Fetched | Matched |", "|---|---:|---:|"]
-        for r in sorted(healthy, key=lambda x: -int(x.get("passed") or 0)):
+        rest = [r for r in rows if r not in broken]
+        contributed = sorted(
+            (r for r in rest if int(r.get("passed") or 0) > 0),
+            key=lambda x: -int(x.get("passed") or 0),
+        )
+        quiet = [r for r in rest if int(r.get("passed") or 0) == 0]
+
+        total_fetched = sum(int(r.get("fetched") or 0) for r in rows)
+        total_passed = sum(int(r.get("passed") or 0) for r in rows)
+        lines += [
+            f"**{total_passed} matches** from {total_fetched:,} postings "
+            f"across {len(rows)} sources.",
+            "",
+        ]
+        for r in contributed:
             lines.append(
-                f"| {r.get('source')} | {int(r.get('fetched') or 0)} | {int(r.get('passed') or 0)} |"
+                f"- **{r.get('source')}** — {int(r.get('passed') or 0)} "
+                f"of {int(r.get('fetched') or 0):,}"
             )
-        lines.append("")
+        if contributed:
+            lines.append("")
+        if quiet:
+            names = ", ".join(str(r.get("source")) for r in quiet)
+            lines += [f"No matches from {names} (fetched normally).", ""]
         if broken:
-            lines.append("**Sources returning nothing:**")
+            lines.append("**Check these — nothing came back:**")
             lines.append("")
             for r in broken:
-                reason = r.get("error") or "fetched 0 items"
-                lines.append(f"- `{r.get('source')}` — {reason}")
+                lines.append(f"- **{r.get('source')}** — {r.get('error') or 'fetched 0 items'}")
             lines.append("")
     if llm_usage:
         used = llm_usage.get("used")

@@ -35,6 +35,14 @@ class JobDigestMailer:
                 "SMTP_PASSWORD is wrapped in quotes or padded with whitespace — "
                 "store the raw app password, without the quotes used in .env"
             )
+        # Gmail app passwords are exactly 16 characters (spaces are cosmetic). A
+        # truncated paste otherwise surfaces only as an opaque 535.
+        if "gmail" in (self._settings.SMTP_HOST or "") and len(password.replace(" ", "")) != 16:
+            raise RuntimeError(
+                f"SMTP_PASSWORD has {len(password.replace(' ', ''))} characters "
+                "(ignoring spaces); a Gmail app password has exactly 16 — it looks "
+                "truncated or mistyped"
+            )
         timeout = float(getattr(self._settings, "SMTP_TIMEOUT_SECONDS", 30) or 30)
         with smtplib.SMTP(self._settings.SMTP_HOST, self._settings.SMTP_PORT, timeout=timeout) as server:
             server.starttls()
