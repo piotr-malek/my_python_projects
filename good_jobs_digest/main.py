@@ -339,7 +339,30 @@ def cmd_run_all(args: argparse.Namespace) -> None:
 
 def cmd_check_email(args: argparse.Namespace) -> None:
     """Authenticate against SMTP without sending, so bad credentials fail fast."""
+    import hashlib
+
     from mail.mailer import JobDigestMailer
+
+    # Shape + fingerprint only — never the secret itself. Comparing this against a
+    # local run tells you whether CI has a *different* value (secret is wrong) or the
+    # *same* value being refused (Google is blocking the runner).
+    pw = settings.SMTP_PASSWORD or ""
+    logger.info(
+        "SMTP_PASSWORD shape: len=%s stripped=%s spaces=%s len_no_spaces=%s "
+        "all_lower_ascii=%s fingerprint=%s fingerprint_no_spaces=%s",
+        len(pw),
+        len(pw.strip()),
+        pw.count(" "),
+        len(pw.replace(" ", "")),
+        all(c.islower() or c == " " for c in pw) if pw else False,
+        hashlib.sha256(pw.encode()).hexdigest()[:10],
+        hashlib.sha256(pw.replace(" ", "").encode()).hexdigest()[:10],
+    )
+    if len(pw.replace(" ", "")) != 16:
+        logger.warning(
+            "A Gmail app password is 16 characters (spaces optional) — this one has %s.",
+            len(pw.replace(" ", "")),
+        )
 
     try:
         JobDigestMailer(settings).verify_login()
