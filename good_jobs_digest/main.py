@@ -301,12 +301,10 @@ def cmd_digest(args: argparse.Namespace) -> None:
     curated_deduped = dedupe_by_company_title([dict(r) for r in curated_rows])
     board_deduped = dedupe_by_company_title([dict(r) for r in board_rows])
     n = len(curated_deduped) + len(board_deduped)
+    # A zero-match day is still worth an email: silence is indistinguishable from a
+    # broken pipeline, and the health footer is exactly what tells them apart.
     if n == 0:
-        logger.info("No unsent jobs to email — skipping send")
-        if args.dry_run_email:
-            path = mailer.write_fallback(text, digest_date=date.today())
-            logger.info("Wrote empty digest preview to %s", path)
-        return
+        logger.info("No unsent jobs — sending run-health-only digest")
     if args.dry_run_email:
         logger.info("Dry run: not sending email. Preview:\n%s", text[:2000])
         path = mailer.write_fallback(text, digest_date=date.today())

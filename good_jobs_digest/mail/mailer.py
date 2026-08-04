@@ -65,7 +65,8 @@ class JobDigestMailer:
 
     def _build_message(self, digest_text: str, *, digest_date: date, n_jobs: int):
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Job digest — {digest_date.isoformat()} — {n_jobs} matches"
+        matches = f"{n_jobs} matches" if n_jobs else "no new matches"
+        msg["Subject"] = f"Job digest — {digest_date.isoformat()} — {matches}"
         msg["From"] = self._settings.SMTP_USER
         msg["To"] = self._settings.EMAIL_TO
         msg.attach(MIMEText(digest_text, "plain", "utf-8"))

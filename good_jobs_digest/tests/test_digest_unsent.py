@@ -154,3 +154,36 @@ def test_build_digest_unsent_wording():
     md = build_markdown_digest(rows, [])
     assert "not sent in a previous digest" in md
     assert "New since yesterday" not in md
+
+
+def test_empty_digest_still_reports_run_health():
+    """A zero-match day must still produce a mailable digest: silence looks
+    identical to a broken pipeline, and the health footer is what distinguishes them."""
+    from datetime import date
+
+    md = build_markdown_digest(
+        [], [],
+        digest_date=date(2026, 8, 4),
+        source_stats=[
+            {"source": "indeed", "fetched": 263, "passed": 0},
+            {"source": "climatebase", "fetched": 0, "passed": 0, "error": "403 Forbidden"},
+        ],
+        llm_usage={"used": 2, "budget": 300},
+    )
+    assert "No new openings to send" in md
+    assert "Run health" in md
+    assert "**0 matches** from 263 postings" in md
+    assert "nothing came back" in md and "climatebase" in md
+
+
+def test_subject_wording_for_zero_matches():
+    from datetime import date
+
+    from config import Settings
+    from mail.mailer import JobDigestMailer
+
+    mailer = JobDigestMailer(Settings())
+    empty = mailer._build_message("body", digest_date=date(2026, 8, 4), n_jobs=0)
+    some = mailer._build_message("body", digest_date=date(2026, 8, 4), n_jobs=7)
+    assert empty["Subject"].endswith("no new matches")
+    assert some["Subject"].endswith("7 matches")
