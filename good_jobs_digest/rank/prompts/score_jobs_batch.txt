@@ -18,8 +18,9 @@ Fit checks — decide each boolean strictly from the full posting. Candidate: EU
 - remote_ok: true only for fully-remote roles; any required office days or relocation → false. Plain "Remote"/unspecified → true.
 - eu_hire_ok: false when hiring is restricted to a non-EU region (e.g. "Remote — US only", "United States (Remote)", US city with no remote option, US work authorization required). EU/Europe hire region, global/work-from-anywhere, or nothing stated → true.
 - timezone_ok: false when US business hours or substantial US-timezone overlap is required (EST/PST hours, "overlap with US team"). European/flexible/unstated hours → true.
-- seniority_ok: false when the role is clearly above mid-level (senior/staff/principal/lead/head/management or far more required years) or below it (internship/graduate).
-- fit_reasons: up to 3 short strings explaining any false boolean (empty array when all true).
+- seniority_ok: **level only.** false when the role is clearly above mid-level (senior/staff/principal/lead/head/management or far more required years) or below it (internship/graduate). Never set it false for location, timezone, remote or role-type reasons — those have their own fields. A mid-level role in the wrong country still has seniority_ok = true.
+- role_ok: **is this really data/analytics/AI engineering?** true for pipelines, data platforms, warehouses, ETL/ELT, data integrations, analytics engineering, applied AI engineering. false for generic software/product engineering, frontend/mobile, pure DevOps/SRE with no data focus, data science/research rather than engineering, or support/customer-facing "engineer" roles. Judge the responsibilities, not the title. This is the only place to say "wrong kind of work".
+- fit_reasons: up to 3 short strings explaining any false boolean (empty array when all true). Name which check failed.
 
 Also populate: extracted_salary, top_requirements (≤5), risks_or_gaps (≤5), one_line_summary.
 

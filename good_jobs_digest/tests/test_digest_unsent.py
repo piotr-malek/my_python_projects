@@ -56,6 +56,7 @@ def test_jobs_for_digest_unsent_only(tmp_path):
         eu_hire_ok=True,
         timezone_ok=True,
         seniority_ok=True,
+        role_ok=True,
     )
     all_rows = repo.jobs_for_digest(min_combined=50, remote_only=False, unsent_only=False)
     assert len(all_rows) == 1
@@ -98,6 +99,7 @@ def test_jobs_for_digest_min_combined_zero_includes_low_scores(tmp_path):
         eu_hire_ok=True,
         timezone_ok=True,
         seniority_ok=True,
+        role_ok=True,
     )
     assert len(repo.jobs_for_digest(min_combined=0, remote_only=False)) == 1
     assert len(repo.jobs_for_digest(min_combined=50, remote_only=False)) == 0

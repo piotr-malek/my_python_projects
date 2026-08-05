@@ -126,6 +126,7 @@ def test_scored_jobs_not_requeued_until_content_changes(tmp_path):
         eu_hire_ok=True,
         timezone_ok=True,
         seniority_ok=True,
+        role_ok=True,
     )
     assert len(repo.jobs_needing_score()) == 0
     repo.upsert_job(

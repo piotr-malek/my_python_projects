@@ -89,6 +89,7 @@ def test_scorer_parses_a_normal_response():
         "eu_hire_ok": True,
         "timezone_ok": True,
         "seniority_ok": True,
+        "role_ok": True,
         "fit_reasons": [],
         "extracted_salary": None,
         "top_requirements": [],

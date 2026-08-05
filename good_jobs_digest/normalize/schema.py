@@ -17,6 +17,7 @@ class JobScorePayload(BaseModel):
     eu_hire_ok: bool | None = None
     timezone_ok: bool | None = None
     seniority_ok: bool | None = None
+    role_ok: bool | None = None
     fit_reasons: list[str] = Field(default_factory=list)
     extracted_salary: str | None = None
     top_requirements: list[str] = Field(default_factory=list)

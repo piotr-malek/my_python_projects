@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   eu_hire_ok INTEGER,
   timezone_ok INTEGER,
   seniority_ok INTEGER,
+  role_ok INTEGER,
   combined_score REAL,
   llm_json TEXT,
   last_scored_at TEXT,

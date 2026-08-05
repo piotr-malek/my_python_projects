@@ -35,6 +35,7 @@ _JOBS_EXTRA_COLUMNS: dict[str, str] = {
     "eu_hire_ok": "INTEGER",
     "timezone_ok": "INTEGER",
     "seniority_ok": "INTEGER",
+    "role_ok": "INTEGER",
 }
 
 
@@ -66,6 +67,7 @@ class JobRow:
     eu_hire_ok: int | None
     timezone_ok: int | None
     seniority_ok: int | None
+    role_ok: int | None
     combined_score: float | None
     llm_json: str | None
     last_scored_at: str | None
@@ -271,7 +273,7 @@ class JobRepository:
                       posted_at = COALESCE(?, posted_at), description_text = ?,
                       content_hash = ?, last_seen_at = ?, last_changed_at = ?,
                       relevance_score = NULL, mission_score = NULL, fit_score = NULL,
-                      remote_ok = NULL, eu_hire_ok = NULL, timezone_ok = NULL, seniority_ok = NULL,
+                      remote_ok = NULL, eu_hire_ok = NULL, timezone_ok = NULL, seniority_ok = NULL, role_ok = NULL,
                       combined_score = NULL, llm_json = NULL, last_scored_at = NULL
                     WHERE id = ?
                     """,
@@ -366,7 +368,7 @@ class JobRepository:
         max_age_days: int | None = None,
     ) -> list[sqlite3.Row]:
         """Jobs that passed prefilter and are unscored, updated since last score,
-        or scored before the fit booleans existed (seniority_ok IS NULL)."""
+        or scored before the current fit booleans existed (role_ok IS NULL)."""
         age_clause = ""
         if max_age_days is not None and max_age_days > 0:
             age_clause = (
@@ -379,7 +381,7 @@ class JobRepository:
               AND (
                 last_scored_at IS NULL
                 OR datetime(last_changed_at) > datetime(last_scored_at)
-                OR seniority_ok IS NULL
+                OR role_ok IS NULL
               )
               {age_clause}
             ORDER BY first_seen_at ASC
@@ -402,6 +404,7 @@ class JobRepository:
         eu_hire_ok: bool | None = None,
         timezone_ok: bool | None = None,
         seniority_ok: bool | None = None,
+        role_ok: bool | None = None,
     ) -> None:
         now = _utc_now_iso()
 
@@ -413,7 +416,7 @@ class JobRepository:
                 """
                 UPDATE jobs SET
                   relevance_score = ?, mission_score = ?, fit_score = ?,
-                  remote_ok = ?, eu_hire_ok = ?, timezone_ok = ?, seniority_ok = ?,
+                  remote_ok = ?, eu_hire_ok = ?, timezone_ok = ?, seniority_ok = ?, role_ok = ?,
                   combined_score = ?, llm_json = ?, last_scored_at = ?
                 WHERE id = ?
                 """,
@@ -425,6 +428,7 @@ class JobRepository:
                     _b(eu_hire_ok),
                     _b(timezone_ok),
                     _b(seniority_ok),
+                    _b(role_ok),
                     combined,
                     json.dumps(llm_payload),
                     now,
@@ -449,7 +453,9 @@ class JobRepository:
         true; rows scored before those existed are NULL and stay out until rescored.
         """
         remote_clause = "AND remote_ok = 1" if remote_only else ""
-        fit_gate_clause = "AND eu_hire_ok = 1 AND timezone_ok = 1 AND seniority_ok = 1"
+        fit_gate_clause = (
+            "AND eu_hire_ok = 1 AND timezone_ok = 1 AND seniority_ok = 1 AND role_ok = 1"
+        )
         unsent_clause = "AND digest_included_at IS NULL" if unsent_only else ""
         score_clause = "AND combined_score IS NOT NULL"
         if min_combined > 0:

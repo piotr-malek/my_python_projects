@@ -28,6 +28,7 @@ SCORE_JSON_SCHEMA: dict[str, Any] = {
         "eu_hire_ok",
         "timezone_ok",
         "seniority_ok",
+        "role_ok",
         "fit_reasons",
         "extracted_salary",
         "top_requirements",
@@ -42,6 +43,7 @@ SCORE_JSON_SCHEMA: dict[str, Any] = {
         "eu_hire_ok": {"type": "boolean"},
         "timezone_ok": {"type": "boolean"},
         "seniority_ok": {"type": "boolean"},
+        "role_ok": {"type": "boolean"},
         "fit_reasons": {"type": "array", "items": {"type": "string"}},
         # Gemini's response_schema takes a single type plus `nullable`; a JSON-Schema
         # union like ["string", "null"] is rejected outright.

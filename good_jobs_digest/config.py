@@ -88,7 +88,9 @@ class Settings:
                 "TARGET_ROLE_KEYWORDS",
                 "artificial intelligence engineer,analytics engineer,analytics engineering,"
                 "ai engineer,data engineer,data engineering,"
-                "data integration,data integrations,data platform engineer,etl engineer",
+                "data integration,data integrations,data platform engineer,etl engineer,"
+                "data architect,business intelligence engineer,bi engineer,"
+                "database engineer,analytics developer",
             ).split(",")
             if k.strip()
         ]

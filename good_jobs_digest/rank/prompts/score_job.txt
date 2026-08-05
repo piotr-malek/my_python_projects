@@ -52,11 +52,17 @@ timezone_ok (boolean):
 - true if working hours are compatible with European business hours (roughly 09:00–17:00 CET): European/EMEA hours, flexible/async hours, global team, or nothing stated.
 - false if the role requires US business hours or substantial US-timezone overlap (e.g. "EST/PST working hours", "core hours 9–5 Eastern", "must overlap 6+ hours with US team").
 
-seniority_ok (boolean):
+seniority_ok (boolean) — LEVEL ONLY, nothing else:
 - true if the required level matches the target/acceptable seniority in the requirements (mid-level; junior acceptable).
-- false if the role is clearly above it (senior/staff/principal/lead/head/management, or requires far more years of experience than the candidate has) or below it (internship/graduate scheme).
+- false ONLY because of level: senior/staff/principal/lead/head/management titles, or far more years of experience than the candidate has, or below it (internship/graduate scheme).
+- Do NOT set this false for location, timezone, remote or role-type concerns — those have their own fields below. A mid-level role in the wrong country still has seniority_ok = true.
 
-fit_reasons: up to 3 short strings explaining any false fit-check boolean (empty array when all true).
+role_ok (boolean) — IS THIS THE RIGHT KIND OF ROLE:
+- true if the day-to-day work is data/analytics/AI engineering: building pipelines, data platforms, warehouses, ETL/ELT, data integrations, analytics engineering, or applied AI engineering.
+- false if the role is really something else wearing a similar title: generic software/product engineering, frontend/mobile work, pure DevOps/SRE/infrastructure with no data focus, data science/research rather than engineering, or a support/customer-facing "engineer".
+- This is the one place to express "not the right kind of work". Judge the responsibilities in the description, not the job title.
+
+fit_reasons: up to 3 short strings explaining any false fit-check boolean (empty array when all true). Name which check failed and why.
 
 Other fields:
 - extracted_salary: short string if comp stated, else null. Compare to minimum in requirements when scoring risks.

@@ -196,6 +196,7 @@ def cmd_score(args: argparse.Namespace) -> None:
             eu_hire_ok=out.eu_hire_ok,
             timezone_ok=out.timezone_ok,
             seniority_ok=out.seniority_ok,
+            role_ok=out.role_ok,
         )
         if bq and settings.BQ_WRITE_LLM_SCORES:
             bq.append_llm_score(
