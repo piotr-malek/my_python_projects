@@ -41,7 +41,11 @@ class Settings:
             if m.strip()
         )
         self.GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
-        self.GEMINI_MAX_RETRIES = max(1, int(os.getenv("GEMINI_MAX_RETRIES", "3")))
+        # Retries *after* the first attempt, per call. Keep this at 1: retries used
+        # to nest (two temperatures × five attempts × a batch splitting in half),
+        # so one unlucky batch of 8 jobs could spend 30 of the daily 300 requests.
+        # A job that fails both attempts is emailed unscored instead of retried.
+        self.GEMINI_MAX_RETRIES = max(0, int(os.getenv("GEMINI_MAX_RETRIES", "1")))
         # Free-tier guardrails: requests/minute and a persisted requests/day cap.
         self.GEMINI_RPM = int(os.getenv("GEMINI_RPM", "8"))
         self.GEMINI_DAILY_REQUEST_BUDGET = int(os.getenv("GEMINI_DAILY_REQUEST_BUDGET", "300"))
@@ -57,12 +61,18 @@ class Settings:
         self.REGISTRY_LLM_FILTER = _env_bool("REGISTRY_LLM_FILTER", True)
         self.SCORE_MAX_PER_RUN = int(os.getenv("SCORE_MAX_PER_RUN", "0"))  # 0 = no cap
         self.SCORE_MAX_AGE_DAYS = int(os.getenv("SCORE_MAX_AGE_DAYS", "30"))  # 0 = no age filter
+        # Give up on a job after this many failed scoring runs; 0 = never give up.
+        # It still gets emailed unscored, so nothing is lost by stopping.
+        self.SCORE_MAX_ATTEMPTS = int(os.getenv("SCORE_MAX_ATTEMPTS", "3"))
         # Digest cutoff; 0 = include all scored jobs. Set >0 to filter weak matches from email.
         self.MIN_COMBINED_SCORE = float(os.getenv("MIN_COMBINED_SCORE", "0"))
         # Digest floor on the LLM candidate_fit score (fit_score column); 0 = disabled.
         self.MIN_CANDIDATE_FIT = float(os.getenv("MIN_CANDIDATE_FIT", "40"))
         # Max jobs per digest section (curated / boards); 0 = unlimited.
         self.DIGEST_TOP_N = int(os.getenv("DIGEST_TOP_N", "50"))
+        # Cap on the unscored section, so a day of failed LLM calls cannot turn the
+        # digest into a wall of unfiltered jobs; 0 = unlimited.
+        self.DIGEST_UNSCORED_MAX = int(os.getenv("DIGEST_UNSCORED_MAX", "25"))
         self.DIGEST_REMOTE_ONLY = _env_bool("DIGEST_REMOTE_ONLY", True)
         self.SMTP_HOST = _env("SMTP_HOST", "smtp.gmail.com")
         self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   combined_score REAL,
   llm_json TEXT,
   last_scored_at TEXT,
+  score_failed_at TEXT,
+  score_attempts INTEGER NOT NULL DEFAULT 0,
   digest_included_at TEXT,
   canonical_job_id TEXT,
   registry_ats_type TEXT,

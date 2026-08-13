@@ -89,11 +89,13 @@ def build_markdown_digest(
     digest_date: date | None = None,
     source_stats: list[Any] | None = None,
     llm_usage: dict[str, Any] | None = None,
+    unscored_rows: list[Any] | None = None,
 ) -> str:
-    """Two sections: curated employer ATS jobs, then mission job board listings."""
+    """Curated employer ATS jobs, then mission job boards, then unscored leftovers."""
     digest_date = digest_date or date.today()
     curated_items = dedupe_by_company_title([_row_dict(r) for r in curated_rows])
     board_items = dedupe_by_company_title([_row_dict(r) for r in board_rows])
+    unscored_items = dedupe_by_company_title([_row_dict(r) for r in (unscored_rows or [])])
     total = len(curated_items) + len(board_items)
 
     lines = [
@@ -106,14 +108,36 @@ def build_markdown_digest(
             f"({len(curated_items)} curated employers, {len(board_items)} job boards).",
             "",
         ]
-    else:
+    elif not unscored_items:
         lines += [
             "No new openings to send (all scored jobs were already emailed).",
+            "",
+        ]
+    else:
+        lines += [
+            "No new scored openings to send (all scored jobs were already emailed).",
+            "",
+        ]
+    if unscored_items:
+        lines += [
+            f"Plus **{len(unscored_items)}** that Gemini could not score, listed unscored below.",
             "",
         ]
 
     _section_jobs(lines, "Curated employers (ATS)", curated_items)
     _section_jobs(lines, "Mission job boards", board_items)
+    if unscored_items:
+        # Better a raw listing than a silent drop: these passed the title filter,
+        # but Gemini could not score them, so no score, remote or location check
+        # has been applied to them.
+        lines += [
+            f"## Unscored — Gemini could not score these {len(unscored_items)}",
+            "",
+            "Title filter only: no score, and no remote/EU/seniority check.",
+            "",
+        ]
+        for job in unscored_items:
+            lines += job_block_lines(job)
     lines += _health_footer(source_stats, llm_usage)
 
     return "\n".join(lines).rstrip() + "\n"

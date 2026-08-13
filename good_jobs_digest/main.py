@@ -142,7 +142,10 @@ def cmd_score(args: argparse.Namespace) -> None:
     if score_limit is None and settings.SCORE_MAX_PER_RUN > 0:
         score_limit = settings.SCORE_MAX_PER_RUN
     max_age = settings.SCORE_MAX_AGE_DAYS if settings.SCORE_MAX_AGE_DAYS > 0 else None
-    rows = repo.jobs_needing_score(limit=score_limit, max_age_days=max_age)
+    max_attempts = settings.SCORE_MAX_ATTEMPTS if settings.SCORE_MAX_ATTEMPTS > 0 else None
+    rows = repo.jobs_needing_score(
+        limit=score_limit, max_age_days=max_age, max_attempts=max_attempts
+    )
     cap_note = score_limit if score_limit else "none"
     age_note = max_age if max_age else "none"
     logger.info(
@@ -177,7 +180,9 @@ def cmd_score(args: argparse.Namespace) -> None:
         row = jobs_by_id.get(job_id)
         if row is None or out is None:
             skipped += 1
-            logger.warning("Skip job id=%s (score failed)", job_id)
+            # Not a drop: the job goes into the digest's unscored section instead.
+            repo.record_score_failure(job_id)
+            logger.warning("Score failed for job id=%s — will be emailed unscored", job_id)
             continue
         ok += 1
         combined = settings.combined_weighted(
@@ -273,10 +278,21 @@ def cmd_digest(args: argparse.Namespace) -> None:
         ),
         sent_keys,
     )
+    # Jobs Gemini could not score. They skip every score-based gate, so they get
+    # their own capped section rather than being dropped.
+    unscored_rows = exclude_already_sent(
+        repo.jobs_unscored_for_digest(
+            unsent_only=True,
+            limit=settings.DIGEST_UNSCORED_MAX if settings.DIGEST_UNSCORED_MAX > 0 else None,
+        ),
+        sent_keys,
+    )
     logger.info(
-        "Digest candidates: %s curated, %s job boards (unsent, above score threshold)",
+        "Digest candidates: %s curated, %s job boards (unsent, above score threshold), "
+        "%s unscored",
         len(curated_rows),
         len(board_rows),
+        len(unscored_rows),
     )
     usage_path = getattr(settings, "GEMINI_USAGE_PATH", None)
     llm_usage: dict[str, object] | None = None
@@ -297,11 +313,13 @@ def cmd_digest(args: argparse.Namespace) -> None:
         digest_date=date.today(),
         source_stats=repo.latest_source_stats(),
         llm_usage=llm_usage,
+        unscored_rows=unscored_rows,
     )
     mailer = JobDigestMailer(settings)
     curated_deduped = dedupe_by_company_title([dict(r) for r in curated_rows])
     board_deduped = dedupe_by_company_title([dict(r) for r in board_rows])
-    n = len(curated_deduped) + len(board_deduped)
+    unscored_deduped = dedupe_by_company_title([dict(r) for r in unscored_rows])
+    n = len(curated_deduped) + len(board_deduped) + len(unscored_deduped)
     # A zero-match day is still worth an email: silence is indistinguishable from a
     # broken pipeline, and the health footer is exactly what tells them apart.
     if n == 0:
@@ -319,13 +337,19 @@ def cmd_digest(args: argparse.Namespace) -> None:
     except Exception as exc:
         path = mailer.write_fallback(text, digest_date=date.today())
         raise SystemExit(f"SMTP failed ({exc}); wrote {path}") from exc
-    included_ids = [int(r["id"]) for r in curated_rows] + [int(r["id"]) for r in board_rows]
+    # Unscored jobs are marked sent too: they have been emailed once, and with
+    # scoring attempts capped they would otherwise reappear every run.
+    included_ids = (
+        [int(r["id"]) for r in curated_rows]
+        + [int(r["id"]) for r in board_rows]
+        + [int(r["id"]) for r in unscored_rows]
+    )
     repo.mark_digest_included(included_ids)
     if bq and settings.BQ_WRITE_DIGEST_HISTORY and not args.dry_run_email:
         bq.append_selected_jobs(
             digest_date=date.today().isoformat(),
             selected_at=_now_iso(),
-            rows=curated_deduped + board_deduped,
+            rows=curated_deduped + board_deduped + unscored_deduped,
         )
     logger.info("Digest sent (%s jobs)", n)
 

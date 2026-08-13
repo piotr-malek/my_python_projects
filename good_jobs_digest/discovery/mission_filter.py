@@ -56,23 +56,19 @@ class EmployerMissionFilter:
         self.budget_exhausted = False
 
     def _call_llm(self, prompt: str) -> dict[str, Any] | None:
+        """One call. GeminiClient owns the single retry, at temperature 0."""
         if self.budget_exhausted:
             return None
-        for temp in (0.1, 0.0):
-            try:
-                raw = self._llm.generate_json(
-                    prompt,
-                    schema=MISSION_SCORE_BATCH_JSON_SCHEMA,
-                    temperature=temp,
-                )
-            except BudgetExhausted as exc:
-                logger.warning("Gemini daily budget spent (%s) — employers left unscored", exc)
-                self.budget_exhausted = True
-                return None
-            if raw is not None:
-                return raw
-            logger.info("mission score produced no JSON (temp=%s)", temp)
-        return None
+        try:
+            return self._llm.generate_json(
+                prompt,
+                schema=MISSION_SCORE_BATCH_JSON_SCHEMA,
+                temperature=0.1,
+            )
+        except BudgetExhausted as exc:
+            logger.warning("Gemini daily budget spent (%s) — employers left unscored", exc)
+            self.budget_exhausted = True
+            return None
 
     def _build_score_batch_prompt(self, employers: list[dict[str, str]]) -> str:
         blocks: list[str] = []
@@ -95,18 +91,25 @@ class EmployerMissionFilter:
             logger.warning("mission score batch failed for %s employers", len(employers))
             return []
 
+        # Neither failure mode is worth a per-employer retry storm: nothing is
+        # cached, so these employers are simply rescored on the next run.
         try:
             payload = _BatchMissionScorePayload.model_validate(raw)
-        except ValidationError:
-            return self._score_chunk_fallback(employers)
+        except ValidationError as exc:
+            logger.warning(
+                "mission score unusable for %s employers (%s) — retried next run",
+                len(employers),
+                exc,
+            )
+            return []
 
         if len(payload.results) != len(employers):
             logger.warning(
-                "mission score count mismatch: got %s results for %s employers",
+                "mission score count mismatch: got %s results for %s employers — retried next run",
                 len(payload.results),
                 len(employers),
             )
-            return self._score_chunk_fallback(employers)
+            return []
 
         scored: list[dict[str, str]] = []
         for row, verdict in zip(employers, payload.results, strict=True):
@@ -116,24 +119,6 @@ class EmployerMissionFilter:
             out["mission_llm_reason"] = verdict.reason
             out["mission_type"] = verdict.mission_type
             scored.append(out)
-        return scored
-
-    def _score_chunk_fallback(self, employers: list[dict[str, str]]) -> list[dict[str, str]]:
-        """Retry a failed batch one employer at a time.
-
-        Never recurse on a single row: _score_chunk calls back here on a validation
-        failure, so a row the model consistently mangles would otherwise ping-pong
-        between the two until the stack blows.
-        """
-        if len(employers) <= 1:
-            logger.warning(
-                "mission score unusable for %s — skipping",
-                employers[0].get("company_name") if employers else "(empty)",
-            )
-            return []
-        scored: list[dict[str, str]] = []
-        for row in employers:
-            scored.extend(self._score_chunk([row]))
         return scored
 
     def score_employers(self, employers: list[dict[str, str]]) -> list[dict[str, str]]:

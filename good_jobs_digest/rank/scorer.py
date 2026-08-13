@@ -124,28 +124,24 @@ class JobScorer:
         *,
         prompt: str,
         schema: dict[str, Any],
-        temperatures: tuple[float, ...] = (0.15, 0.0),
+        temperature: float = 0.15,
         max_output_tokens: int | None = None,
     ) -> dict[str, Any] | None:
+        """One call. GeminiClient owns the single retry, at temperature 0."""
         if self.budget_exhausted:
             return None
-        for attempt, temp in enumerate(temperatures):
-            try:
-                raw = self._llm.generate_json(
-                    prompt,
-                    schema=schema,
-                    temperature=temp,
-                    max_output_tokens=max_output_tokens,
-                )
-            except BudgetExhausted as exc:
-                # Stop the whole run cleanly; unscored jobs are retried tomorrow.
-                logger.warning("Gemini daily budget spent (%s) — leaving rest unscored", exc)
-                self.budget_exhausted = True
-                return None
-            if raw is not None:
-                return raw
-            logger.info("score attempt %s produced no JSON", attempt + 1)
-        return None
+        try:
+            return self._llm.generate_json(
+                prompt,
+                schema=schema,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+        except BudgetExhausted as exc:
+            # Stop the whole run cleanly; unscored jobs are retried tomorrow.
+            logger.warning("Gemini daily budget spent (%s) — leaving rest unscored", exc)
+            self.budget_exhausted = True
+            return None
 
     def _build_single_prompt(self, row: dict[str, Any], scoring_input: str) -> str:
         return self._template.format(
@@ -206,18 +202,11 @@ class JobScorer:
             schema=BATCH_SCORE_JSON_SCHEMA,
             max_output_tokens=self._max_tokens_for_batch(len(rows)),
         )
+        # A failed batch used to split in half and recurse, and a row the batch
+        # mangled used to be re-asked on its own. Both multiplied request cost
+        # without much to show for it; these jobs now go out unscored instead.
         if raw is None:
-            if len(rows) > 1:
-                mid = len(rows) // 2
-                logger.info(
-                    "Batch score failed for %s jobs — retrying as %s + %s",
-                    len(rows),
-                    mid,
-                    len(rows) - mid,
-                )
-                return self._score_chunk(rows[:mid], scoring_input) + self._score_chunk(
-                    rows[mid:], scoring_input
-                )
+            logger.warning("Batch score failed for %s job(s) — leaving them unscored", len(rows))
             return [(int(r["id"]), None) for r in rows]
 
         scores_raw = raw.get("scores")
@@ -232,8 +221,9 @@ class JobScorer:
                 continue
             try:
                 out.append((jid, JobScorePayload.model_validate(scores_raw[i])))
-            except ValidationError:
-                out.append((jid, self.score_job(row, scoring_input)))
+            except ValidationError as exc:
+                logger.info("Batch score unusable for job id=%s: %s", jid, exc)
+                out.append((jid, None))
         return out
 
     def score_jobs_parallel(

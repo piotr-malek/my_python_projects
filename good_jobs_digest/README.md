@@ -109,6 +109,13 @@ remaining jobs simply stay unscored and are picked up on the next run.
 Jobs are scored in batches (`LLM_SCORE_BATCH_SIZE`) to keep request counts low;
 steady-state usage is roughly 50–150 requests/day, well inside the free tier.
 
+Each call gets **one** retry (`GEMINI_MAX_RETRIES`), at temperature 0. Retries used to
+nest — two temperatures per call, several HTTP attempts each, and a failed batch
+splitting in half — so one unlucky batch of 8 jobs could spend 30 requests. A job that
+fails both attempts is emailed **unscored** in its own digest section rather than
+dropped (`DIGEST_UNSCORED_MAX` caps how many), and is retried on later runs until
+`SCORE_MAX_ATTEMPTS`. Those rows skip every score-based gate, including remote-only.
+
 Google retires pinned model ids without notice (`gemini-2.5-flash-lite` now 404s for
 new keys), so the client falls back through `GEMINI_MODEL_FALLBACKS` and logs a
 warning rather than leaving you without a digest.

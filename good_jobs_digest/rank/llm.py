@@ -11,6 +11,10 @@ Staying free is enforced twice over:
    daily request budget (`data/gemini_usage.json`). When the budget is spent the
    client stops issuing calls and the affected jobs stay unscored, to be picked
    up on the next run rather than silently dropped.
+3. At most one retry per call (GEMINI_MAX_RETRIES). Retries used to nest —
+   two temperatures per call, up to five HTTP attempts each, and a batch that
+   split in half on failure — so one bad batch of 8 jobs could burn 30 requests.
+   Jobs that still fail go into the digest unscored instead.
 """
 
 from __future__ import annotations
@@ -125,7 +129,7 @@ class GeminiClient:
             if m and m != self._model
         ]
         self._max_output_tokens = int(getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", 4096))
-        self._max_retries = int(getattr(settings, "GEMINI_MAX_RETRIES", 3))
+        self._max_retries = int(getattr(settings, "GEMINI_MAX_RETRIES", 1))
         api_key = getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
         if not api_key:
             raise RuntimeError(
@@ -172,27 +176,51 @@ class GeminiClient:
         if schema:
             config["response_schema"] = schema
 
-        delay = 2.0
-        # Model swaps shouldn't eat the retry budget meant for transient errors.
-        for attempt in range(1, self._max_retries + len(self._fallbacks) + 1):
+        # One retry and no more: every attempt spends a request from the daily
+        # budget, and callers now treat a failure as "leave this unscored" rather
+        # than something to escalate. Model swaps are not retries — a retired
+        # model id would fail identically forever — so they get their own budget.
+        retries_left = max(0, self._max_retries)
+        attempt = 0
+        temp = temperature
+
+        def _retry(reason: str, *, sleep_for: float = 0.0) -> bool:
+            """Consume one retry; the second try runs at temperature 0."""
+            nonlocal retries_left, temp
+            if retries_left <= 0:
+                logger.warning("gemini gave up after %s attempt(s): %s", attempt, reason)
+                return False
+            retries_left -= 1
+            temp = 0.0
+            if sleep_for:
+                time.sleep(sleep_for)
+            return True
+
+        while True:
+            attempt += 1
             self._ledger.reserve()  # propagates BudgetExhausted
             self._limiter.wait()
             try:
                 response = self._client.models.generate_content(
                     model=self._model,
                     contents=prompt,
-                    config=types.GenerateContentConfig(**config),
+                    config=types.GenerateContentConfig(**{**config, "temperature": temp}),
                 )
                 text = (getattr(response, "text", "") or "").strip()
                 if not text:
-                    logger.info("gemini returned empty text (attempt %s)", attempt)
-                    continue
+                    if _retry(f"empty text (attempt {attempt})"):
+                        continue
+                    return None
                 parsed = json.loads(_extract_json_object(text))
                 if isinstance(parsed, dict):
                     return parsed
-                logger.info("gemini returned non-object JSON (attempt %s)", attempt)
+                if _retry(f"non-object JSON (attempt {attempt})"):
+                    continue
+                return None
             except json.JSONDecodeError as exc:
-                logger.info("gemini JSON parse failed (attempt %s): %s", attempt, exc)
+                if _retry(f"JSON parse failed (attempt {attempt}): {exc}"):
+                    continue
+                return None
             except Exception as exc:  # noqa: BLE001
                 message = str(exc)
                 if ("404" in message or "NOT_FOUND" in message) and self._fallbacks:
@@ -210,7 +238,7 @@ class GeminiClient:
                 )
                 logger.warning("gemini error (attempt %s): %s", attempt, message[:200])
                 if not transient:
-                    break
-                time.sleep(delay)
-                delay *= 2
-        return None
+                    return None
+                if _retry(f"transient error: {message[:120]}", sleep_for=2.0):
+                    continue
+                return None

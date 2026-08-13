@@ -36,6 +36,8 @@ _JOBS_EXTRA_COLUMNS: dict[str, str] = {
     "timezone_ok": "INTEGER",
     "seniority_ok": "INTEGER",
     "role_ok": "INTEGER",
+    "score_failed_at": "TEXT",
+    "score_attempts": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -274,7 +276,8 @@ class JobRepository:
                       content_hash = ?, last_seen_at = ?, last_changed_at = ?,
                       relevance_score = NULL, mission_score = NULL, fit_score = NULL,
                       remote_ok = NULL, eu_hire_ok = NULL, timezone_ok = NULL, seniority_ok = NULL, role_ok = NULL,
-                      combined_score = NULL, llm_json = NULL, last_scored_at = NULL
+                      combined_score = NULL, llm_json = NULL, last_scored_at = NULL,
+                      score_failed_at = NULL, score_attempts = 0
                     WHERE id = ?
                     """,
                     (
@@ -366,15 +369,24 @@ class JobRepository:
         *,
         limit: int | None = None,
         max_age_days: int | None = None,
+        max_attempts: int | None = None,
     ) -> list[sqlite3.Row]:
         """Jobs that passed prefilter and are unscored, updated since last score,
-        or scored before the current fit booleans existed (role_ok IS NULL)."""
+        or scored before the current fit booleans existed (role_ok IS NULL).
+
+        max_attempts drops rows that have already failed scoring that many times:
+        with retries capped, a row the model cannot handle would otherwise spend
+        requests every single run. A changed description resets the counter.
+        """
         age_clause = ""
         if max_age_days is not None and max_age_days > 0:
             age_clause = (
                 f"AND datetime(COALESCE(posted_at, first_seen_at)) "
                 f">= datetime('now', '-{int(max_age_days)} days')"
             )
+        attempts_clause = ""
+        if max_attempts is not None and max_attempts > 0:
+            attempts_clause = f"AND COALESCE(score_attempts, 0) < {int(max_attempts)}"
         sql = f"""
             SELECT * FROM jobs
             WHERE prefilter_pass = 1
@@ -384,6 +396,7 @@ class JobRepository:
                 OR role_ok IS NULL
               )
               {age_clause}
+              {attempts_clause}
             ORDER BY first_seen_at ASC
             """
         if limit is not None and limit > 0:
@@ -417,7 +430,8 @@ class JobRepository:
                 UPDATE jobs SET
                   relevance_score = ?, mission_score = ?, fit_score = ?,
                   remote_ok = ?, eu_hire_ok = ?, timezone_ok = ?, seniority_ok = ?, role_ok = ?,
-                  combined_score = ?, llm_json = ?, last_scored_at = ?
+                  combined_score = ?, llm_json = ?, last_scored_at = ?,
+                  score_failed_at = NULL, score_attempts = 0
                 WHERE id = ?
                 """,
                 (
@@ -434,6 +448,53 @@ class JobRepository:
                     now,
                     job_id,
                 ),
+            )
+
+    def record_score_failure(self, job_id: int) -> None:
+        """Note a failed scoring attempt so the job can go out unscored.
+
+        Missing a good job is worse than emailing one without a score, so a job
+        the LLM could not score still reaches the digest (see
+        jobs_unscored_for_digest). The attempt counter stops a permanently
+        unscorable row from spending requests on every future run.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE jobs SET
+                  score_failed_at = ?, score_attempts = COALESCE(score_attempts, 0) + 1
+                WHERE id = ?
+                """,
+                (_utc_now_iso(), job_id),
+            )
+
+    def jobs_unscored_for_digest(
+        self,
+        *,
+        unsent_only: bool = True,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        """Prefilter-passed jobs whose LLM scoring failed, so they can be emailed anyway.
+
+        No score means none of the score-based gates (combined score, fit,
+        remote, EU/timezone/seniority) can be applied — these rows are listed in
+        their own digest section rather than mixed into the ranked ones.
+        """
+        unsent_clause = "AND digest_included_at IS NULL" if unsent_only else ""
+        limit_clause = f"LIMIT {int(limit)}" if limit is not None and limit > 0 else ""
+        with self._conn() as conn:
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT * FROM jobs
+                    WHERE prefilter_pass = 1
+                      AND combined_score IS NULL
+                      AND score_failed_at IS NOT NULL
+                      {unsent_clause}
+                    ORDER BY datetime(COALESCE(posted_at, first_seen_at)) DESC, company_name, title
+                    {limit_clause}
+                    """
+                ).fetchall()
             )
 
     def jobs_for_digest(

@@ -63,16 +63,46 @@ def test_loads_json_response_repairs_trailing_commas():
     assert len(parsed["scores"]) == 1
 
 
-def test_score_chunk_splits_on_batch_failure():
+def test_score_chunk_does_not_split_on_batch_failure():
+    """A failed batch costs exactly one call: no halving, no per-job re-ask.
+
+    The jobs come back unscored and reach the digest's unscored section instead.
+    """
     settings = Settings()
     scorer = JobScorer(settings, llm=StubLLM())
     rows = [_row(1), _row(2)]
     good = JobScorePayload.model_validate(_payload())
 
-    with patch.object(scorer, "_call_llm", return_value=None):
-        with patch.object(scorer, "score_job", return_value=good):
+    with patch.object(scorer, "_call_llm", return_value=None) as call:
+        with patch.object(scorer, "score_job", return_value=good) as single:
             results = scorer._score_chunk(rows, "profile")
 
-    assert len(results) == 2
+    assert results == [(1, None), (2, None)]
+    assert call.call_count == 1
+    assert single.call_count == 0
+
+
+def test_score_chunk_leaves_unusable_row_unscored():
+    """A row the batch mangled is not re-asked on its own — that used to cost
+    one extra call per malformed row."""
+    settings = Settings()
+    scorer = JobScorer(settings, llm=StubLLM())
+    rows = [_row(1), _row(2)]
+    fake = {"scores": [_payload(), {"role_relevance": "not a number"}]}
+
+    with patch.object(scorer, "_call_llm", return_value=fake):
+        with patch.object(scorer, "score_job") as single:
+            results = scorer._score_chunk(rows, "profile")
+
     assert results[0][1] is not None
-    assert results[1][1] is not None
+    assert results[1] == (2, None)
+    assert single.call_count == 0
+
+
+def test_call_llm_makes_one_request():
+    """The scorer no longer retries at a second temperature; the client owns the
+    single retry, so a call here is exactly one generate_json."""
+    stub = StubLLM([None])
+    scorer = JobScorer(Settings(), llm=stub)
+    assert scorer.score_job(_row(1), "profile") is None
+    assert len(stub.prompts) == 1
