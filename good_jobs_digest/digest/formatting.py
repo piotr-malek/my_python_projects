@@ -12,20 +12,88 @@ def _norm_key(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
-def dedupe_by_company_title(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep highest combined_score per canonical_job_id or (company, title)."""
-    best: dict[tuple[str, str], dict[str, Any]] = {}
-    for j in jobs:
-        ckey = str(j.get("canonical_job_id") or "").strip()
+# A trailing " - Berlin, Germany" is the same opening as " - Cork, Ireland"; a
+# trailing " - GTM" or " - Analytics Platform" is a different role. Both shapes are
+# common in real titles, so the location strip has to be narrow: a comma, at most
+# four words, and no word that could name a role or a team.
+_TITLE_TAIL_RE = re.compile(r"\s[-–—]\s([^-–—]+)$")
+_ROLE_TAIL_WORDS = frozenset(
+    {
+        "ai", "analyst", "analytics", "backend", "bi", "cloud", "data", "dbt",
+        "delivery", "developer", "devops", "engineer", "engineering", "etl", "frontend",
+        "infra", "infrastructure", "intelligence", "lead", "manager", "ml", "ops",
+        "operations", "platform", "principal", "product", "reporting", "research",
+        "science", "security", "senior", "services", "software", "staff", "systems",
+        "team", "tech", "warehouse", "web",
+    }
+)
+
+
+def strip_location_suffix(title: str) -> str:
+    """Drop a trailing ' - City, Country' so per-city reposts collapse together."""
+    match = _TITLE_TAIL_RE.search(title)
+    if not match:
+        return title
+    tail = match.group(1).strip()
+    if "," not in tail:
+        return title
+    words = re.findall(r"[A-Za-z]+", tail.lower())
+    if not words or len(words) > 4 or any(w in _ROLE_TAIL_WORDS for w in words):
+        return title
+    return title[: match.start()].strip() or title
+
+
+def _dedupe_groups(jobs: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Group postings that are the same opening.
+
+    Two rows belong together if they share a canonical_job_id (cross-source
+    duplicate, possibly with differing company spellings) *or* the same company
+    and title once a trailing location is stripped. Both tests are needed:
+    canonical_job_id hashes company + title + location + week, so per-location
+    reposts each get their own — which is why keying on it alone let four
+    Speechify postings and three PVcase postings through as separate openings.
+    """
+    parent: dict[Any, Any] = {}
+
+    def find(key: Any) -> Any:
+        parent.setdefault(key, key)
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    def union(a: Any, b: Any) -> None:
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[root_a] = root_b
+
+    for i, job in enumerate(jobs):
+        node = ("row", i)
+        company = _norm_key(str(job.get("company_name") or ""))
+        title = _norm_key(strip_location_suffix(str(job.get("title") or "")))
+        union(node, ("title", company, title))
+        ckey = str(job.get("canonical_job_id") or "").strip()
         if ckey:
-            key = ("canonical", ckey)
-        else:
-            key = (_norm_key(str(j.get("company_name") or "")), _norm_key(str(j.get("title") or "")))
-        score = float(j.get("combined_score") or 0)
-        prev = best.get(key)
-        if prev is None or score > float(prev.get("combined_score") or 0):
-            best[key] = j
-    out = list(best.values())
+            union(node, ("canonical", ckey))
+
+    groups: dict[Any, list[dict[str, Any]]] = {}
+    for i, job in enumerate(jobs):
+        groups.setdefault(find(("row", i)), []).append(job)
+    return list(groups.values())
+
+
+def dedupe_by_company_title(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per opening, keeping the highest combined_score.
+
+    Collapsed rows are counted in `duplicate_count` so the digest can say how
+    many postings a line stands for rather than hiding them.
+    """
+    out: list[dict[str, Any]] = []
+    for group in _dedupe_groups(jobs):
+        best = max(group, key=lambda j: float(j.get("combined_score") or 0))
+        if len(group) > 1:
+            best = {**best, "duplicate_count": len(group)}
+        out.append(best)
     out.sort(key=lambda x: (-float(x.get("combined_score") or 0), str(x.get("company_name") or "")))
     return out
 
@@ -243,6 +311,12 @@ def job_bullet_line(job: dict[str, Any]) -> str:
     url = (job.get("url") or "").strip()
     llm = _llm_payload(job)
 
+    duplicates = int(job.get("duplicate_count") or 0)
+    if duplicates > 1:
+        # This line stands for several cities, so naming one of them misleads;
+        # the link still points at the highest-scoring posting.
+        title = strip_location_suffix(title)
+
     if url:
         head = f"[**{title}**]({url}) at **{company}**"
     else:
@@ -251,6 +325,11 @@ def job_bullet_line(job: dict[str, Any]) -> str:
     score = format_score(job)
     if score:
         head += f" · Score **{score}**"
+
+    # Say what was collapsed instead of silently dropping it: the same role posted
+    # per city is one opening, but knowing there are five is useful.
+    if duplicates > 1:
+        head += f" · {duplicates} postings"
 
     role = _role_blurb(job, llm)
     org = _company_blurb(job)

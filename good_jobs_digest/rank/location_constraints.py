@@ -7,8 +7,32 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # (regex, canonical region label)
+#
+# The bare two-letter "US" is only read as a country in shapes the pronoun cannot
+# take ("Delaware, US", "US-based", "the US"). Matching a plain \bus\b tagged every
+# posting that said "join us" or "about us" as United States — which is how a London
+# role ended up looking US-only.
+_US_PATTERN = (
+    r"\bunited states\b|\bu\.s\.?a?\.?\b|\busa\b|,\s*us\b|\bus[-\s]based\b|\bthe us\b"
+    r"|\bus (?:only|citizens?|residents?|work authorization|employment)\b"
+)
+
+# Job boards write countries as ISO codes far more often than as names
+# ("Munich, BY, DE", "Den Haag, ZH, NL"). Without these, an EU posting reads as
+# having no stated region at all — or worse, as US-only when one of several
+# locations happens to be American.
+_EU_ISO_CODES: dict[str, str] = {
+    "de": "Germany", "nl": "Netherlands", "pl": "Poland", "fr": "France",
+    "es": "Spain", "ie": "Ireland", "pt": "Portugal", "it": "Italy",
+    "be": "Belgium", "at": "Austria", "se": "Sweden", "dk": "Denmark",
+    "fi": "Finland", "cz": "Czechia", "ro": "Romania", "gr": "Greece",
+    "hu": "Hungary", "bg": "Bulgaria", "hr": "Croatia", "sk": "Slovakia",
+    "si": "Slovenia", "lt": "Lithuania", "lv": "Latvia", "ee": "Estonia",
+    "lu": "Luxembourg", "gb": "United Kingdom", "uk": "United Kingdom",
+}
+
 _REGION_PATTERNS: list[tuple[str, str]] = [
-    (r"\bunited states\b|\bu\.?\s*s\.?\b|\busa\b", "United States"),
+    (_US_PATTERN, "United States"),
     (r"\bunited kingdom\b|\b(?:^|\W)uk(?:$|\W)\b", "United Kingdom"),
     (r"\bcanada\b", "Canada"),
     (r"\beuropean union\b|\beu\b(?!\s*time)", "EU"),
@@ -22,36 +46,92 @@ _REGION_PATTERNS: list[tuple[str, str]] = [
     (r"\baustralia\b", "Australia"),
     (r"\bindia\b", "India"),
     (r"\bsingapore\b", "Singapore"),
+    (r"\bbrazil\b|\bbrasil\b", "Brazil"),
+    (r"\bmexico\b", "Mexico"),
+    (r"\bjapan\b", "Japan"),
+    (r"\bchina\b|\bhong kong\b", "China"),
+    (r"\bisrael\b", "Israel"),
+    (r"\bphilippines\b", "Philippines"),
+    (r"\bnew zealand\b", "New Zealand"),
+    (r"\bsouth africa\b", "South Africa"),
+    (r"\bbelarus\b", "Belarus"),
+    (r"\bunited arab emirates\b|\bdubai\b", "United Arab Emirates"),
 ]
 
-# Expansions for preference tokens like acceptable_hire_regions: [EU]
+# The guard only fires on these. Anything else — an unrecognised city, a country
+# not listed here, no location at all — is left to the model and allowed through.
+# Letting a few non-EU roles slip into the digest is cheap; dropping a real EU
+# opening is not, so this list is deliberately short rather than exhaustive.
+_NON_EU_DESTINATIONS = frozenset(
+    {
+        "United States",
+        "Canada",
+        "India",
+        "Australia",
+        "Singapore",
+        "Brazil",
+        "Mexico",
+        "Japan",
+        "China",
+        "Israel",
+        "Philippines",
+        "New Zealand",
+        "South Africa",
+        "Belarus",
+        "United Arab Emirates",
+    }
+)
+
+# ISO codes are matched ONLY against the location line, never the description: a
+# comma followed by "at", "it" or "de" is ordinary prose ("..., at Frontify",
+# "..., it is") and tagged jobs with countries they never mentioned.
+_LOCATION_ONLY_PATTERNS: list[tuple[str, str]] = [
+    (rf",\s*{code}\b", label) for code, label in _EU_ISO_CODES.items()
+]
+
+# Expansions for preference tokens like acceptable_hire_regions: [EU].
+# Every member state has to be listed, not just the handful the boards mention
+# most: a label that is recognised but missing from here reads as "stated a
+# region, and it isn't acceptable" — i.e. a Lisbon or Stockholm posting would be
+# dropped as non-EU. UK is included deliberately (kept from the original list).
+_EU_MEMBER_LABELS = frozenset(
+    {
+        "EU",
+        "Europe",
+        "Austria",
+        "Belgium",
+        "Bulgaria",
+        "Croatia",
+        "Cyprus",
+        "Czechia",
+        "Denmark",
+        "Estonia",
+        "Finland",
+        "France",
+        "Germany",
+        "Greece",
+        "Hungary",
+        "Ireland",
+        "Italy",
+        "Latvia",
+        "Lithuania",
+        "Luxembourg",
+        "Malta",
+        "Netherlands",
+        "Poland",
+        "Portugal",
+        "Romania",
+        "Slovakia",
+        "Slovenia",
+        "Spain",
+        "Sweden",
+        "United Kingdom",
+    }
+)
+
 _ACCEPTABLE_EXPANSIONS: dict[str, frozenset[str]] = {
-    "EU": frozenset(
-        {
-            "EU",
-            "Europe",
-            "Germany",
-            "France",
-            "Poland",
-            "Spain",
-            "Netherlands",
-            "Ireland",
-            "United Kingdom",
-        }
-    ),
-    "Europe": frozenset(
-        {
-            "EU",
-            "Europe",
-            "Germany",
-            "France",
-            "Poland",
-            "Spain",
-            "Netherlands",
-            "Ireland",
-            "United Kingdom",
-        }
-    ),
+    "EU": _EU_MEMBER_LABELS,
+    "Europe": _EU_MEMBER_LABELS,
 }
 
 _AUTH_PATTERNS: list[tuple[str, str]] = [
@@ -107,6 +187,10 @@ def location_policy_from_prefs(prefs: dict[str, Any]) -> LocationPolicy:
 class LocationConstraints:
     location_line: str | None = None
     stated_regions: list[str] = field(default_factory=list)
+    # Regions named by the location line or the title only. The guard uses these
+    # rather than stated_regions: a description that merely mentions a US office
+    # is not a statement about where the hire may sit.
+    location_regions: list[str] = field(default_factory=list)
     auth_signals: list[str] = field(default_factory=list)
     remote_within_region: bool = False
     appears_global_remote: bool = False
@@ -166,10 +250,13 @@ def evaluate_hire_region_fit(
     return None
 
 
-def _find_regions(text: str) -> list[str]:
+def _find_regions(text: str, *, include_iso_codes: bool = False) -> list[str]:
     blob = text.lower()
+    patterns = list(_REGION_PATTERNS)
+    if include_iso_codes:
+        patterns += _LOCATION_ONLY_PATTERNS
     found: list[str] = []
-    for pattern, label in _REGION_PATTERNS:
+    for pattern, label in patterns:
         if re.search(pattern, blob, flags=re.I):
             if label not in found:
                 found.append(label)
@@ -182,12 +269,12 @@ def _parse_location_line(location_text: str | None) -> tuple[str | None, list[st
         return None, [], False
 
     remote_within = bool(re.search(r"\(\s*remote\s*\)|remote\s*[-–—]\s*|,\s*remote\b", loc, flags=re.I))
-    regions = _find_regions(loc)
+    regions = _find_regions(loc, include_iso_codes=True)
 
     paren = re.match(r"^(.+?)\s*\(\s*remote\s*\)\s*$", loc, flags=re.I)
     if paren:
         inner = paren.group(1).strip()
-        inner_regions = _find_regions(inner)
+        inner_regions = _find_regions(inner, include_iso_codes=True)
         if inner_regions:
             regions = inner_regions
         elif inner:
@@ -229,9 +316,15 @@ def extract_location_constraints(
 
     appears_global = any(m in blob for m in _GLOBAL_REMOTE_MARKERS)
 
+    location_regions: list[str] = []
+    for r in loc_regions + title_regions:
+        if r not in location_regions:
+            location_regions.append(r)
+
     base = LocationConstraints(
         location_line=loc_line,
         stated_regions=regions,
+        location_regions=location_regions,
         auth_signals=auth,
         remote_within_region=remote_within,
         appears_global_remote=appears_global,
@@ -355,26 +448,68 @@ def apply_location_guard(
     acceptable_hire_regions: list[str] | None = None,
     allow_unspecified_location: bool | None = None,
 ) -> Any:
-    """Post-LLM safety: force remote_ok=false when hire region conflicts with preferences."""
+    """Post-LLM safety: correct the location booleans for clearly non-EU postings.
+
+    Models get this wrong in the expensive direction — observed on real rows, a
+    Minsk posting scored eu_hire_ok=true, and Singapore and Sydney postings did
+    too, each with prose that named the country correctly. A regex doesn't have
+    opinions, so it backstops the judgement here.
+
+    Deliberately lenient: it fires only when the posting names one of a short list
+    of common non-EU destinations *and* names no acceptable region. An unfamiliar
+    city, an unlisted country, or no location at all is allowed through. Some
+    non-EU roles will reach the digest; that is much cheaper than dropping a real
+    EU opening because a location line was written in a way the regexes missed.
+    """
     if policy is not None:
         acceptable_hire_regions = policy.acceptable_hire_regions or acceptable_hire_regions
         if allow_unspecified_location is None:
             allow_unspecified_location = policy.allow_unspecified_location
-    fit = evaluate_hire_region_fit(
-        constraints,
-        acceptable_hire_regions,
-        allow_unspecified_location=True if allow_unspecified_location is None else allow_unspecified_location,
+
+    acceptable = expand_acceptable_hire_regions(acceptable_hire_regions)
+    if not acceptable:
+        return payload
+    if any(r in acceptable for r in constraints.stated_regions):
+        return payload  # names somewhere it can hire — good enough
+
+    blocked = [r for r in constraints.location_regions if r in _NON_EU_DESTINATIONS]
+    us_auth = any(
+        "united states" in a.lower() or "u.s." in a.lower() for a in constraints.auth_signals
     )
-    mismatch = fit is False or constraints.likely_region_mismatch
-    if not mismatch:
+    if not blocked and not us_auth:
         return payload
 
-    if getattr(payload, "remote_ok", None) is True:
-        payload.remote_ok = False
-        gaps = list(getattr(payload, "risks_or_gaps", None) or [])
-        regions = ", ".join(acceptable_hire_regions or []) or "candidate preferences"
-        note = f"Hire region incompatible with acceptable regions ({regions})"
-        if note not in gaps:
-            gaps.insert(0, note)
-            payload.risks_or_gaps = gaps[:5]
+    forced = [
+        gate
+        for gate in ("remote_ok", "eu_hire_ok")
+        if getattr(payload, gate, None) is True
+    ]
+    if not forced:
+        return payload
+
+    for gate in forced:
+        setattr(payload, gate, False)
+    gaps = list(getattr(payload, "risks_or_gaps", None) or [])
+    regions = ", ".join(acceptable_hire_regions or []) or "candidate preferences"
+    stated = ", ".join(blocked) or "United States (work authorization required)"
+    note = f"Hire region incompatible with acceptable regions ({regions}); posting states: {stated}"
+    if note not in gaps:
+        gaps.insert(0, note)
+        payload.risks_or_gaps = gaps[:5]
     return payload
+
+
+def guard_job_payload(
+    payload: Any,
+    job: dict[str, Any],
+    *,
+    policy: LocationPolicy,
+) -> tuple[Any, list[str]]:
+    """Apply the location guard to one scored job; report which gates it corrected."""
+    before = {gate: getattr(payload, gate, None) for gate in ("remote_ok", "eu_hire_ok")}
+    constraints = location_constraints_from_job(job, policy=policy)
+    payload = apply_location_guard(payload, constraints, policy=policy)
+    corrected = [
+        gate for gate, was in before.items() if was is True and getattr(payload, gate, None) is False
+    ]
+    return payload, corrected

@@ -1,4 +1,4 @@
-"""Gemini structured scoring for job rows (parallel + optional multi-job batches)."""
+"""Structured LLM scoring for job rows (parallel + optional multi-job batches)."""
 
 from __future__ import annotations
 
@@ -14,10 +14,15 @@ from pydantic import ValidationError
 
 from config import Settings
 from normalize.schema import JobScorePayload
-from rank.llm import BudgetExhausted, GeminiClient
+from rank.llm import BudgetExhausted, MistralClient, make_llm_client
 
 logger = logging.getLogger(__name__)
 
+# Strict structured-output form: every object closed with additionalProperties
+# false, every property required, and optional values expressed as a type union
+# rather than a separate optional flag. Range limits (0-100) are deliberately
+# absent — strict mode rejects `minimum`/`maximum`, and JobScorePayload enforces
+# them anyway, so an out-of-range answer leaves the job unscored.
 SCORE_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": [
@@ -36,22 +41,21 @@ SCORE_JSON_SCHEMA: dict[str, Any] = {
         "one_line_summary",
     ],
     "properties": {
-        "role_relevance": {"type": "integer", "minimum": 0, "maximum": 100},
-        "mission_alignment": {"type": "integer", "minimum": 0, "maximum": 100},
-        "candidate_fit": {"type": "integer", "minimum": 0, "maximum": 100},
+        "role_relevance": {"type": "integer"},
+        "mission_alignment": {"type": "integer"},
+        "candidate_fit": {"type": "integer"},
         "remote_ok": {"type": "boolean"},
         "eu_hire_ok": {"type": "boolean"},
         "timezone_ok": {"type": "boolean"},
         "seniority_ok": {"type": "boolean"},
         "role_ok": {"type": "boolean"},
         "fit_reasons": {"type": "array", "items": {"type": "string"}},
-        # Gemini's response_schema takes a single type plus `nullable`; a JSON-Schema
-        # union like ["string", "null"] is rejected outright.
-        "extracted_salary": {"type": "string", "nullable": True},
+        "extracted_salary": {"type": ["string", "null"]},
         "top_requirements": {"type": "array", "items": {"type": "string"}},
         "risks_or_gaps": {"type": "array", "items": {"type": "string"}},
         "one_line_summary": {"type": "string"},
     },
+    "additionalProperties": False,
 }
 
 BATCH_SCORE_JSON_SCHEMA: dict[str, Any] = {
@@ -61,9 +65,9 @@ BATCH_SCORE_JSON_SCHEMA: dict[str, Any] = {
         "scores": {
             "type": "array",
             "items": SCORE_JSON_SCHEMA,
-            "minItems": 1,
         }
     },
+    "additionalProperties": False,
 }
 
 def _extract_json_object(text: str) -> str:
@@ -103,18 +107,28 @@ def _truncate_desc(text: str, limit: int) -> str:
 
 
 class JobScorer:
-    def __init__(self, settings: Settings, llm: GeminiClient | None = None):
+    def __init__(self, settings: Settings, llm: MistralClient | None = None):
         self._settings = settings
         self._desc_limit = int(getattr(settings, "LLM_DESC_TRUNCATE", 2000) or 2000)
         prompts = Path(__file__).parent / "prompts"
         self._template = (prompts / "score_job.txt").read_text(encoding="utf-8")
         self._batch_template = (prompts / "score_jobs_batch.txt").read_text(encoding="utf-8")
-        self._llm = llm or GeminiClient(settings)
+        self._llm = llm or make_llm_client(settings)
         self.budget_exhausted = False
+
+    @property
+    def model(self) -> str:
+        """Model id actually answering the prompts, for the BigQuery score rows."""
+        return getattr(self._llm, "model", "unknown")
+
+    @property
+    def usage(self) -> Any:
+        """The client's daily request ledger (None for test stubs)."""
+        return getattr(self._llm, "usage", None)
 
     def _max_tokens_for_batch(self, n_jobs: int) -> int:
         """Batch JSON needs more tokens than a single score object."""
-        base = int(getattr(self._settings, "GEMINI_MAX_OUTPUT_TOKENS", 4096))
+        base = int(getattr(self._settings, "LLM_MAX_OUTPUT_TOKENS", 4096))
         if n_jobs <= 1:
             return base
         return max(base, min(16384, 700 * n_jobs + 512))
@@ -127,7 +141,7 @@ class JobScorer:
         temperature: float = 0.15,
         max_output_tokens: int | None = None,
     ) -> dict[str, Any] | None:
-        """One call. GeminiClient owns the single retry, at temperature 0."""
+        """One call. The client owns the single retry, at temperature 0."""
         if self.budget_exhausted:
             return None
         try:
@@ -139,7 +153,7 @@ class JobScorer:
             )
         except BudgetExhausted as exc:
             # Stop the whole run cleanly; unscored jobs are retried tomorrow.
-            logger.warning("Gemini daily budget spent (%s) — leaving rest unscored", exc)
+            logger.warning("Daily LLM budget spent (%s) — leaving rest unscored", exc)
             self.budget_exhausted = True
             return None
 

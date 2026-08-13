@@ -1,20 +1,24 @@
-"""Gemini Flash JSON client with free-tier guardrails.
+"""Mistral JSON client with free-tier guardrails.
 
 Everything the pipeline sends to an LLM goes through here: job scoring
 (`rank/scorer.py`) and the employer mission screen (`discovery/mission_filter.py`).
 
-Staying free is enforced twice over:
+Mistral La Plateforme's free "Experiment" tier needs no card and no prepaid
+credit, which is the whole reason this pipeline runs on it: the workload is
+roughly 2M tokens a month, far under the allowance, and no provider that bills
+by prepayment is worth a minimum top-up that would last years at this rate.
 
-1. Use an AI Studio API key on a project with **billing disabled**. Google cannot
-   charge such a key — over-quota requests simply return 429.
-2. Belt and braces in code: a requests-per-minute throttle plus a persisted
-   daily request budget (`data/gemini_usage.json`). When the budget is spent the
-   client stops issuing calls and the affected jobs stay unscored, to be picked
-   up on the next run rather than silently dropped.
-3. At most one retry per call (GEMINI_MAX_RETRIES). Retries used to nest —
-   two temperatures per call, up to five HTTP attempts each, and a batch that
-   split in half on failure — so one bad batch of 8 jobs could burn 30 requests.
-   Jobs that still fail go into the digest unscored instead.
+Three guardrails:
+
+1. A requests-per-minute throttle (`LLM_RPM`).
+2. A persisted daily request budget (`LLM_DAILY_REQUEST_BUDGET`, counted in
+   `data/llm_usage.json`). When it is spent the client stops issuing calls.
+3. At most one retry per call (`LLM_MAX_RETRIES`). Retries used to nest — two
+   temperatures per call, several HTTP attempts each, and a batch that split in
+   half on failure — so one bad batch of 8 jobs could burn 30 requests.
+
+Jobs that fail anyway are emailed unscored rather than dropped, so none of these
+limits can lose an opening.
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+PROVIDER_NAME = "mistral"
 
 
 class BudgetExhausted(RuntimeError):
@@ -70,7 +76,7 @@ class UsageLedger:
                 json.dumps({"date": self._day, "count": self._count}), encoding="utf-8"
             )
         except OSError as exc:  # pragma: no cover - disk issues shouldn't kill a run
-            logger.debug("could not persist gemini usage: %s", exc)
+            logger.debug("could not persist llm usage: %s", exc)
 
     @property
     def used(self) -> int:
@@ -89,9 +95,7 @@ class UsageLedger:
             if today != self._day:  # rolled past midnight mid-run
                 self._day, self._count = today, 0
             if self._budget > 0 and self._count >= self._budget:
-                raise BudgetExhausted(
-                    f"daily Gemini request budget of {self._budget} is spent"
-                )
+                raise BudgetExhausted(f"daily request budget of {self._budget} is spent")
             self._count += 1
             self._save()
 
@@ -115,43 +119,93 @@ class _RateLimiter:
             time.sleep(sleep_for)
 
 
-class GeminiClient:
-    """Thin wrapper returning parsed JSON objects, or None on failure."""
+class MistralClient:
+    """Chat completions with schema-constrained JSON, one retry, and a budget."""
 
-    def __init__(self, settings: Any):
-        self._model = getattr(settings, "GEMINI_MODEL", "gemini-3.5-flash-lite")
-        # Google retires pinned model ids without warning (2.5-flash-lite started
-        # 404ing for new keys). For an unattended daily run, failing over beats
-        # silently producing no digest at all.
-        self._fallbacks = [
-            m
-            for m in getattr(settings, "GEMINI_MODEL_FALLBACKS", ())
-            if m and m != self._model
-        ]
-        self._max_output_tokens = int(getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", 4096))
-        self._max_retries = int(getattr(settings, "GEMINI_MAX_RETRIES", 1))
-        api_key = getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+    provider = PROVIDER_NAME
+
+    def __init__(self, settings: Any, http: Any | None = None):
+        self._model = getattr(settings, "MISTRAL_MODEL", "mistral-medium-latest")
+        self._max_output_tokens = int(getattr(settings, "LLM_MAX_OUTPUT_TOKENS", 4096))
+        self._max_retries = max(0, int(getattr(settings, "LLM_MAX_RETRIES", 1)))
+        self._limiter = _RateLimiter(int(getattr(settings, "LLM_RPM", 8)))
+        self._ledger = UsageLedger(
+            Path(getattr(settings, "LLM_USAGE_PATH", "data/llm_usage.json")),
+            int(getattr(settings, "LLM_DAILY_REQUEST_BUDGET", 300)),
+        )
+        api_key = getattr(settings, "MISTRAL_API_KEY", "") or os.getenv("MISTRAL_API_KEY", "")
         if not api_key:
             raise RuntimeError(
-                "GEMINI_API_KEY is not set — create one at https://aistudio.google.com/apikey "
-                "on a project WITHOUT billing enabled so it can never incur charges."
+                "MISTRAL_API_KEY is not set — create one at https://console.mistral.ai/. "
+                "The free Experiment tier needs no card and covers this pipeline many "
+                "times over."
             )
-        try:
-            from google import genai
-        except ImportError as exc:  # pragma: no cover
-            raise RuntimeError("google-genai is required: pip install google-genai") from exc
+        self._base_url = str(getattr(settings, "MISTRAL_BASE_URL", "https://api.mistral.ai/v1"))
+        if http is not None:
+            self._http = http
+        else:
+            import httpx
 
-        self._genai = genai
-        self._client = genai.Client(api_key=api_key)
-        self._limiter = _RateLimiter(int(getattr(settings, "GEMINI_RPM", 15)))
-        self._ledger = UsageLedger(
-            Path(getattr(settings, "GEMINI_USAGE_PATH", "data/gemini_usage.json")),
-            int(getattr(settings, "GEMINI_DAILY_REQUEST_BUDGET", 800)),
-        )
+            self._http = httpx.Client(
+                base_url=self._base_url,
+                timeout=float(getattr(settings, "LLM_TIMEOUT_SECONDS", 120)),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
 
     @property
     def usage(self) -> UsageLedger:
         return self._ledger
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    def _request(
+        self,
+        *,
+        prompt: str,
+        schema: dict[str, Any] | None,
+        temperature: float,
+        max_output_tokens: int,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        if schema:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": schema,
+                    "strict": True,
+                },
+            }
+        else:
+            payload["response_format"] = {"type": "json_object"}
+
+        response = self._http.post("/chat/completions", json=payload)
+        # Surface the status so _is_transient sees it; 429 and 5xx earn the retry.
+        if response.status_code >= 400:
+            raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+        body = response.json()
+        choices = body.get("choices") or []
+        if not choices:
+            return ""
+        return str(choices[0].get("message", {}).get("content") or "")
+
+    @staticmethod
+    def _is_transient(message: str) -> bool:
+        return any(
+            token in message
+            for token in ("429", "500", "502", "503", "504", "rate limit", "timeout")
+        )
 
     def generate_json(
         self,
@@ -166,30 +220,24 @@ class GeminiClient:
         Raises BudgetExhausted when the daily budget is gone, so callers can stop
         early instead of hammering a quota that will only return 429s.
         """
-        from google.genai import types
-
-        config: dict[str, Any] = {
-            "temperature": temperature,
-            "max_output_tokens": max_output_tokens or self._max_output_tokens,
-            "response_mime_type": "application/json",
-        }
-        if schema:
-            config["response_schema"] = schema
-
         # One retry and no more: every attempt spends a request from the daily
-        # budget, and callers now treat a failure as "leave this unscored" rather
-        # than something to escalate. Model swaps are not retries — a retired
-        # model id would fail identically forever — so they get their own budget.
-        retries_left = max(0, self._max_retries)
+        # budget, and callers treat a failure as "leave this unscored" rather
+        # than something to escalate.
+        retries_left = self._max_retries
         attempt = 0
         temp = temperature
+        tokens = max_output_tokens or self._max_output_tokens
 
         def _retry(reason: str, *, sleep_for: float = 0.0) -> bool:
             """Consume one retry; the second try runs at temperature 0."""
             nonlocal retries_left, temp
             if retries_left <= 0:
-                logger.warning("gemini gave up after %s attempt(s): %s", attempt, reason)
+                logger.warning("mistral gave up after %s attempt(s): %s", attempt, reason)
                 return False
+            # Logged loudly on purpose: a retry that succeeds is invisible
+            # otherwise, and a run where *every* call retries silently doubles
+            # both the request count and the wall clock.
+            logger.warning("mistral retrying at temperature 0 — %s", reason)
             retries_left -= 1
             temp = 0.0
             if sleep_for:
@@ -201,12 +249,15 @@ class GeminiClient:
             self._ledger.reserve()  # propagates BudgetExhausted
             self._limiter.wait()
             try:
-                response = self._client.models.generate_content(
-                    model=self._model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(**{**config, "temperature": temp}),
-                )
-                text = (getattr(response, "text", "") or "").strip()
+                text = (
+                    self._request(
+                        prompt=prompt,
+                        schema=schema,
+                        temperature=temp,
+                        max_output_tokens=tokens,
+                    )
+                    or ""
+                ).strip()
                 if not text:
                     if _retry(f"empty text (attempt {attempt})"):
                         continue
@@ -223,22 +274,16 @@ class GeminiClient:
                 return None
             except Exception as exc:  # noqa: BLE001
                 message = str(exc)
-                if ("404" in message or "NOT_FOUND" in message) and self._fallbacks:
-                    retired, self._model = self._model, self._fallbacks.pop(0)
-                    logger.warning(
-                        "Gemini model %r unavailable — falling back to %r. "
-                        "Update GEMINI_MODEL to silence this.",
-                        retired,
-                        self._model,
-                    )
-                    continue
-                transient = any(
-                    token in message
-                    for token in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500")
-                )
-                logger.warning("gemini error (attempt %s): %s", attempt, message[:200])
-                if not transient:
+                logger.warning("mistral error (attempt %s): %s", attempt, message[:200])
+                if not self._is_transient(message):
                     return None
                 if _retry(f"transient error: {message[:120]}", sleep_for=2.0):
                     continue
                 return None
+
+
+def make_llm_client(settings: Any) -> MistralClient:
+    """Single place the pipeline builds its LLM client."""
+    client = MistralClient(settings)
+    logger.info("LLM: %s (%s)", client.provider, client.model)
+    return client

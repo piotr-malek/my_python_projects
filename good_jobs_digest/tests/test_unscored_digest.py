@@ -1,4 +1,4 @@
-"""Jobs Gemini could not score still get emailed.
+"""Jobs the LLM could not score still get emailed.
 
 Missing a good opening is worse than emailing one without a score, so a failed
 scoring attempt is recorded rather than silently dropping the job.
@@ -118,7 +118,7 @@ def test_digest_renders_unscored_section():
     assert "Score" not in md  # no score to show, and none invented
     # The summary line must not claim there is nothing to look at.
     assert "No new scored openings to send" in md
-    assert "could not score" in md
+    assert "could not be scored" in md
 
 
 def test_scored_and_unscored_are_both_summarised():
@@ -146,7 +146,7 @@ def test_scored_and_unscored_are_both_summarised():
     ]
     md = build_markdown_digest([], scored, digest_date=date(2026, 8, 13), unscored_rows=unscored)
     assert "**1** openings not sent in a previous digest" in md
-    assert "Plus **1** that Gemini could not score" in md
+    assert "Plus **1** that could not be scored" in md
     assert "Score **85.5**" in md
 
 

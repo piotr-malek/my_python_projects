@@ -176,3 +176,16 @@ def test_bq_normalized_batch_dedupes_merge_key():
     assert len(merged) == 1
     assert len(merged[0]) == 1, "duplicate merge keys must be collapsed"
     assert merged[0][0]["last_seen_at"] == "2026-08-02T00:00:00+00:00", "keeps the freshest row"
+
+
+def test_footer_names_the_active_provider():
+    """The request count is only interpretable if it says whose budget it is."""
+    md = build_markdown_digest(
+        [], [], digest_date=date(2026, 8, 13),
+        llm_usage={"used": 12, "budget": 300, "provider": "mistral"},
+    )
+    assert "Mistral requests today: **12/300**." in md
+
+    # An older payload without a provider must not render as "Llm".
+    legacy = build_markdown_digest([], [], llm_usage={"used": 2, "budget": 300})
+    assert "LLM requests today: **2/300**." in legacy

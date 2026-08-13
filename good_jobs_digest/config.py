@@ -28,28 +28,27 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 class Settings:
     def __init__(self):
-        # Gemini Flash (AI Studio). Use a key from a project with billing DISABLED:
-        # over-quota calls then return 429 and can never be charged.
-        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-        self.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-        # Tried in order if GEMINI_MODEL is retired (Google 404s old ids without notice).
-        self.GEMINI_MODEL_FALLBACKS = tuple(
-            m.strip()
-            for m in os.getenv(
-                "GEMINI_MODEL_FALLBACKS", "gemini-flash-lite-latest,gemini-2.5-flash"
-            ).split(",")
-            if m.strip()
+        # Mistral La Plateforme. The free "Experiment" tier needs no card and no
+        # prepaid credit, and this pipeline uses ~2M tokens/month against it.
+        # mistral-medium-latest holds the fit booleans (eu_hire_ok, seniority_ok,
+        # role_ok) far better than Small, which agreed with the previous scorer on
+        # role_ok barely half the time and flipped it one way only.
+        self.MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
+        self.MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-medium-latest")
+        self.MISTRAL_BASE_URL = os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1").rstrip(
+            "/"
         )
-        self.GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
+        self.LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096"))
         # Retries *after* the first attempt, per call. Keep this at 1: retries used
         # to nest (two temperatures × five attempts × a batch splitting in half),
         # so one unlucky batch of 8 jobs could spend 30 of the daily 300 requests.
         # A job that fails both attempts is emailed unscored instead of retried.
-        self.GEMINI_MAX_RETRIES = max(0, int(os.getenv("GEMINI_MAX_RETRIES", "1")))
+        self.LLM_MAX_RETRIES = max(0, int(os.getenv("LLM_MAX_RETRIES", "1")))
         # Free-tier guardrails: requests/minute and a persisted requests/day cap.
-        self.GEMINI_RPM = int(os.getenv("GEMINI_RPM", "8"))
-        self.GEMINI_DAILY_REQUEST_BUDGET = int(os.getenv("GEMINI_DAILY_REQUEST_BUDGET", "300"))
-        self.GEMINI_USAGE_PATH = (ROOT / "data" / "gemini_usage.json").resolve()
+        self.LLM_RPM = int(os.getenv("LLM_RPM", "8"))
+        self.LLM_DAILY_REQUEST_BUDGET = int(os.getenv("LLM_DAILY_REQUEST_BUDGET", "300"))
+        self.LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
+        self.LLM_USAGE_PATH = (ROOT / "data" / "llm_usage.json").resolve()
         # Batching keeps the request count (and therefore the free-tier usage) low.
         self.LLM_SCORE_WORKERS = max(1, int(os.getenv("LLM_SCORE_WORKERS", "2")))
         self.LLM_SCORE_BATCH_SIZE = max(1, int(os.getenv("LLM_SCORE_BATCH_SIZE", "8")))

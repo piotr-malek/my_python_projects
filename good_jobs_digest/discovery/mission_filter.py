@@ -1,4 +1,4 @@
-"""Gemini mission scoring: auto-approve employers at or above a liberal score threshold."""
+"""LLM mission scoring: auto-approve employers at or above a liberal score threshold."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from config import Settings
-from rank.llm import BudgetExhausted, GeminiClient
+from rank.llm import BudgetExhausted, MistralClient, make_llm_client
 from normalize.schema import EmployerMissionScoreResult
 from rank.scorer import _extract_json_object
 
@@ -29,15 +29,16 @@ MISSION_SCORE_BATCH_JSON_SCHEMA: dict[str, Any] = {
                 "required": ["company_name", "mission_score", "purpose_driven", "reason", "mission_type"],
                 "properties": {
                     "company_name": {"type": "string"},
-                    "mission_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "mission_score": {"type": "integer"},
                     "purpose_driven": {"type": "boolean"},
                     "reason": {"type": "string"},
                     "mission_type": {"type": "string"},
                 },
+                "additionalProperties": False,
             },
-            "minItems": 1,
         }
     },
+    "additionalProperties": False,
 }
 
 
@@ -46,17 +47,17 @@ class _BatchMissionScorePayload(BaseModel):
 
 
 class EmployerMissionFilter:
-    def __init__(self, settings: Settings, llm: GeminiClient | None = None):
+    def __init__(self, settings: Settings, llm: MistralClient | None = None):
         self._settings = settings
         prompt_path = (
             Path(__file__).resolve().parents[1] / "rank" / "prompts" / "score_mission_employers_batch.txt"
         )
         self._score_template = prompt_path.read_text(encoding="utf-8")
-        self._llm = llm or GeminiClient(settings)
+        self._llm = llm or make_llm_client(settings)
         self.budget_exhausted = False
 
     def _call_llm(self, prompt: str) -> dict[str, Any] | None:
-        """One call. GeminiClient owns the single retry, at temperature 0."""
+        """One call. The client owns the single retry, at temperature 0."""
         if self.budget_exhausted:
             return None
         try:
@@ -66,7 +67,7 @@ class EmployerMissionFilter:
                 temperature=0.1,
             )
         except BudgetExhausted as exc:
-            logger.warning("Gemini daily budget spent (%s) — employers left unscored", exc)
+            logger.warning("Daily LLM budget spent (%s) — employers left unscored", exc)
             self.budget_exhausted = True
             return None
 

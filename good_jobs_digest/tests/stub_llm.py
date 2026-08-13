@@ -1,4 +1,4 @@
-"""A GeminiClient stand-in so tests never need an API key or a network call."""
+"""An LLM client stand-in so tests never need an API key or a network call."""
 
 from __future__ import annotations
 

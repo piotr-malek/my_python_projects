@@ -21,6 +21,8 @@ from digest.formatting import dedupe_by_company_title
 from digest.selection import exclude_already_sent
 from pipelines.curated_ats.ingest import ingest_curated_ats
 from pipelines.job_boards import ingest_job_boards
+from rank.llm import PROVIDER_NAME
+from rank.location_constraints import guard_job_payload, location_policy_from_prefs
 from rank.scorer import JobScorer
 from rank.employer_mission_gate import filter_jobs_by_employer_mission
 from storage.bq_repository import JobBigQuery
@@ -136,6 +138,7 @@ def cmd_score(args: argparse.Namespace) -> None:
         preferences_path=settings.PREFERENCES_PATH,
         profile_path=settings.PROFILE_PATH,
     )
+    location_policy = location_policy_from_prefs(load_preferences(settings.PREFERENCES_PATH))
     scorer = JobScorer(settings)
     bq = _connect_bq()
     score_limit = getattr(args, "max", None)
@@ -176,6 +179,7 @@ def cmd_score(args: argparse.Namespace) -> None:
     logger.info("After employer mission gate: %s job(s) to score", len(jobs))
     ok = 0
     skipped = 0
+    guarded = 0
     for job_id, out in scorer.score_jobs_parallel(jobs, scoring_input):
         row = jobs_by_id.get(job_id)
         if row is None or out is None:
@@ -185,6 +189,19 @@ def cmd_score(args: argparse.Namespace) -> None:
             logger.warning("Score failed for job id=%s — will be emailed unscored", job_id)
             continue
         ok += 1
+        # Deterministic backstop before anything is stored: the model's own prose
+        # has named a non-EU country while still setting eu_hire_ok=true, and a
+        # regex over the stated location doesn't make that mistake.
+        out, corrected = guard_job_payload(out, row, policy=location_policy)
+        if corrected:
+            guarded += 1
+            logger.info(
+                "Location guard corrected %s for id=%s (%s — %s)",
+                ", ".join(corrected),
+                job_id,
+                row["company_name"],
+                row["location_text"] or "location unstated",
+            )
         combined = settings.combined_weighted(
             float(out.role_relevance),
             float(out.mission_alignment),
@@ -209,7 +226,7 @@ def cmd_score(args: argparse.Namespace) -> None:
                 source=row["source"],
                 ats_slug=row["ats_slug"],
                 source_job_id=row["source_job_id"],
-                ollama_model=settings.GEMINI_MODEL,  # BQ column predates the provider swap
+                ollama_model=scorer.model,  # BQ column name predates the provider swaps
                 role_relevance=out.role_relevance,
                 mission_alignment=out.mission_alignment,
                 candidate_fit=out.candidate_fit,
@@ -220,7 +237,9 @@ def cmd_score(args: argparse.Namespace) -> None:
             )
     if bq and settings.BQ_WRITE_LLM_SCORES:
         bq.flush_llm_scores()
-    logger.info("Score finished (%s ok, %s skipped)", ok, skipped)
+    logger.info(
+        "Score finished (%s ok, %s skipped, %s location-guarded)", ok, skipped, guarded
+    )
 
 
 def cmd_digest(args: argparse.Namespace) -> None:
@@ -278,7 +297,7 @@ def cmd_digest(args: argparse.Namespace) -> None:
         ),
         sent_keys,
     )
-    # Jobs Gemini could not score. They skip every score-based gate, so they get
+    # Jobs the LLM could not score. They skip every score-based gate, so they get
     # their own capped section rather than being dropped.
     unscored_rows = exclude_already_sent(
         repo.jobs_unscored_for_digest(
@@ -294,7 +313,7 @@ def cmd_digest(args: argparse.Namespace) -> None:
         len(board_rows),
         len(unscored_rows),
     )
-    usage_path = getattr(settings, "GEMINI_USAGE_PATH", None)
+    usage_path = getattr(settings, "LLM_USAGE_PATH", None)
     llm_usage: dict[str, object] | None = None
     if usage_path and Path(usage_path).is_file():
         try:
@@ -302,7 +321,8 @@ def cmd_digest(args: argparse.Namespace) -> None:
             if str(recorded.get("date")) == date.today().isoformat():
                 llm_usage = {
                     "used": recorded.get("count"),
-                    "budget": settings.GEMINI_DAILY_REQUEST_BUDGET,
+                    "budget": settings.LLM_DAILY_REQUEST_BUDGET,
+                    "provider": PROVIDER_NAME,
                 }
         except (OSError, json.JSONDecodeError):
             llm_usage = None
@@ -371,6 +391,43 @@ def cmd_check_email(args: argparse.Namespace) -> None:
     logger.info("SMTP login OK (%s → %s)", settings.SMTP_USER, settings.EMAIL_TO)
 
 
+def cmd_check_llm(args: argparse.Namespace) -> None:
+    """Spend one request proving the key and the real scoring schema both work.
+
+    Uses the actual SCORE_JSON_SCHEMA rather than a toy one: every provider takes
+    a different dialect of JSON Schema, so a rejected schema is the likeliest way
+    a provider switch fails — and it would otherwise surface ~7 minutes into a
+    run, after all the ingest work, as a digest full of unscored jobs.
+    """
+    from normalize.schema import JobScorePayload
+    from rank.llm import make_llm_client
+    from rank.scorer import SCORE_JSON_SCHEMA
+
+    prompt = (
+        "Score this job for a remote EU-based senior analytics engineer. "
+        "Company: Example Nonprofit. Title: Analytics Engineer. "
+        "Location: Remote (EU). Description: build and own dbt pipelines.\n"
+        "Answer with the JSON object the schema describes."
+    )
+    try:
+        client = make_llm_client(settings)
+        out = client.generate_json(prompt, schema=SCORE_JSON_SCHEMA)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"LLM check failed: {exc}") from exc
+    if out is None:
+        raise SystemExit("LLM check failed: no JSON came back (see the warning above)")
+    try:
+        JobScorePayload.model_validate(out)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"LLM check failed: response did not match the score schema: {exc}") from exc
+    logger.info(
+        "LLM OK: %s (%s) returned a valid score; %s request(s) used today",
+        client.provider,
+        client.model,
+        client.usage.used,
+    )
+
+
 def cmd_discover_candidates(args: argparse.Namespace) -> None:
     from discovery.discover_candidates import run_discover_candidates
 
@@ -386,7 +443,7 @@ def cmd_discover_candidates(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="good_jobs_digest — mission boards + curated ATS → SQLite → Gemini → email"
+        description="good_jobs_digest — mission boards + curated ATS → SQLite → LLM → email"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -403,6 +460,9 @@ def main() -> None:
 
     p_check = sub.add_parser("check-email", help="Verify SMTP credentials without sending")
     p_check.set_defaults(func=cmd_check_email)
+
+    p_check_llm = sub.add_parser("check-llm", help="Verify the LLM key and schema mode (1 request)")
+    p_check_llm.set_defaults(func=cmd_check_llm)
 
     p_digest = sub.add_parser("digest", help="Build ranked digest (two sections) and email")
     p_digest.add_argument("--dry-run-email", action="store_true")

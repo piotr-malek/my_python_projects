@@ -77,8 +77,10 @@ def _health_footer(
     if llm_usage:
         used = llm_usage.get("used")
         budget = llm_usage.get("budget")
+        provider = str(llm_usage.get("provider") or "LLM")
+        label = provider.capitalize() if provider.islower() else provider
         cap = f"{used}/{budget}" if budget else str(used)
-        lines += [f"Gemini requests today: **{cap}**.", ""]
+        lines += [f"{label} requests today: **{cap}**.", ""]
     return lines
 
 
@@ -120,7 +122,7 @@ def build_markdown_digest(
         ]
     if unscored_items:
         lines += [
-            f"Plus **{len(unscored_items)}** that Gemini could not score, listed unscored below.",
+            f"Plus **{len(unscored_items)}** that could not be scored, listed unscored below.",
             "",
         ]
 
@@ -128,10 +130,10 @@ def build_markdown_digest(
     _section_jobs(lines, "Mission job boards", board_items)
     if unscored_items:
         # Better a raw listing than a silent drop: these passed the title filter,
-        # but Gemini could not score them, so no score, remote or location check
+        # but the LLM could not score them, so no score, remote or location check
         # has been applied to them.
         lines += [
-            f"## Unscored — Gemini could not score these {len(unscored_items)}",
+            f"## Unscored — scoring failed for these {len(unscored_items)}",
             "",
             "Title filter only: no score, and no remote/EU/seniority check.",
             "",

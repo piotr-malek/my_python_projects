@@ -103,3 +103,132 @@ def test_location_constraints_from_job_row():
     }
     c = location_constraints_from_job(row, acceptable_hire_regions=EU_ACCEPTABLE)
     assert c.likely_region_mismatch is True
+
+
+def _payload(**overrides) -> JobScorePayload:
+    base = dict(
+        role_relevance=85,
+        mission_alignment=80,
+        candidate_fit=80,
+        remote_ok=True,
+        eu_hire_ok=True,
+        timezone_ok=True,
+        seniority_ok=True,
+        role_ok=True,
+        one_line_summary="Looks good",
+    )
+    base.update(overrides)
+    return JobScorePayload(**base)
+
+
+def test_guard_corrects_eu_hire_ok_not_only_remote_ok():
+    """The model set eu_hire_ok=true on a US-only posting; the guard owns the fix,
+    because eu_hire_ok is what the digest gates on when remote-only is off."""
+    c = extract_location_constraints(
+        location_text="United States (Remote)",
+        description_text="Must be authorized to work in the United States.",
+        acceptable_hire_regions=EU_ACCEPTABLE,
+    )
+    out = apply_location_guard(_payload(), c, acceptable_hire_regions=EU_ACCEPTABLE)
+    assert out.remote_ok is False
+    assert out.eu_hire_ok is False
+    assert any("posting states" in g for g in out.risks_or_gaps)
+
+
+def test_guard_reports_which_gates_it_corrected():
+    from rank.location_constraints import LocationPolicy, guard_job_payload
+
+    job = {
+        "title": "AI Success Engineer",
+        "location_text": "Singapore",
+        "description_text": "Based in Singapore, supporting APAC customers.",
+    }
+    policy = LocationPolicy(acceptable_hire_regions=["EU"])
+    out, corrected = guard_job_payload(_payload(), job, policy=policy)
+    assert set(corrected) == {"remote_ok", "eu_hire_ok"}
+    assert out.eu_hire_ok is False
+
+
+def test_guard_leaves_eu_jobs_untouched():
+    from rank.location_constraints import LocationPolicy, guard_job_payload
+
+    job = {
+        "title": "Analytics Engineer",
+        "location_text": "Remote (EU)",
+        "description_text": "Fully remote within the EU, CET overlap required.",
+    }
+    policy = LocationPolicy(acceptable_hire_regions=["EU"])
+    out, corrected = guard_job_payload(_payload(), job, policy=policy)
+    assert corrected == []
+    assert out.remote_ok is True and out.eu_hire_ok is True
+    assert out.risks_or_gaps == []
+
+
+def test_guard_does_not_resurrect_a_false_gate():
+    """It only ever tightens: a gate the model already set false stays false and
+    is not reported as a correction."""
+    from rank.location_constraints import LocationPolicy, guard_job_payload
+
+    job = {"title": "Data Engineer", "location_text": "Sydney, Australia", "description_text": "Sydney office."}
+    policy = LocationPolicy(acceptable_hire_regions=["EU"])
+    out, corrected = guard_job_payload(_payload(remote_ok=False), job, policy=policy)
+    assert out.remote_ok is False
+    assert corrected == ["eu_hire_ok"]
+
+
+def test_guard_allows_unrecognised_locations():
+    """Relaxed on purpose: an unlisted country or an unfamiliar city is allowed
+    through rather than dropped. Extra non-EU matches are cheaper than a missed
+    EU opening."""
+    from rank.location_constraints import LocationPolicy, guard_job_payload
+
+    policy = LocationPolicy(acceptable_hire_regions=["EU"])
+    for location in ("CH, remote, Sankt Gallen", "Reykjavik", "Belgrade, Serbia", ""):
+        out, corrected = guard_job_payload(
+            _payload(), {"title": "Data Engineer", "location_text": location, "description_text": "Remote role."},
+            policy=policy,
+        )
+        assert corrected == [], location
+        assert out.remote_ok is True and out.eu_hire_ok is True
+
+
+def test_guard_allows_a_posting_that_names_any_acceptable_region():
+    """Multi-location postings hire in every location listed, so one EU office is
+    enough — 'Munich, BY, DE; Delaware, US' must not be read as US-only."""
+    from rank.location_constraints import LocationPolicy, guard_job_payload
+
+    policy = LocationPolicy(acceptable_hire_regions=["EU"])
+    job = {
+        "title": "Senior Data Engineer",
+        "location_text": "Munich, BY, DE; Aachen, NRW, DE; Delaware, US",
+        "description_text": "Join us and build the grid.",
+    }
+    out, corrected = guard_job_payload(_payload(), job, policy=policy)
+    assert corrected == []
+    assert out.eu_hire_ok is True
+
+
+def test_guard_fires_on_listed_non_eu_destinations():
+    from rank.location_constraints import LocationPolicy, guard_job_payload
+
+    policy = LocationPolicy(acceptable_hire_regions=["EU"])
+    for location in ("Singapore", "Sydney, Australia", "Remote - USA", "India - Pune", "Minsk, Belarus"):
+        _, corrected = guard_job_payload(
+            _payload(), {"title": "Data Engineer", "location_text": location, "description_text": "Remote."},
+            policy=policy,
+        )
+        assert "eu_hire_ok" in corrected, location
+
+
+def test_pronoun_us_is_not_a_country():
+    """'join us' / 'about us' used to tag every posting as United States."""
+    from rank.location_constraints import LocationPolicy, guard_job_payload
+
+    policy = LocationPolicy(acceptable_hire_regions=["EU"])
+    job = {
+        "title": "Analytics Engineer",
+        "location_text": "London",
+        "description_text": "Come join us! About us: we build things. Work with us.",
+    }
+    _, corrected = guard_job_payload(_payload(), job, policy=policy)
+    assert corrected == []

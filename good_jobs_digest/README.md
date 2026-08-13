@@ -4,7 +4,7 @@
 
 Every morning, a ranked list of job postings lands in your inbox — filtered for roles that fit you, at organizations that seem to care about something beyond the quarterly report.
 
-Purpose-driven work is scattered across niche boards and opaque ATS pages. This pipeline pulls from mission-oriented job boards, polls curated employer feeds, scores postings against *your* profile with a local LLM, and emails the shortlist.
+Purpose-driven work is scattered across niche boards and opaque ATS pages. This pipeline pulls from mission-oriented job boards, polls curated employer feeds, scores postings against *your* profile with an open-weight LLM (Mistral Small), and emails the shortlist.
 
 > **Heads up:** Scrapes public boards and calls third-party ATS APIs. Respect terms and rate limits. Don't commit credentials to git.
 
@@ -13,7 +13,7 @@ Purpose-driven work is scattered across niche boards and opaque ATS pages. This 
 | Thing | Why |
 |-------|-----|
 | Python 3.12+ | Runs the pipeline |
-| Gemini API key | Scores jobs (`gemini-3.5-flash-lite`). Use an [AI Studio key](https://aistudio.google.com/apikey) on a project with **billing disabled** so it stays free |
+| Mistral API key | Scores jobs (`mistral-small-latest`). The free [Experiment tier](https://console.mistral.ai/) needs no card and no prepaid credit |
 | SMTP | Email — Gmail app password works |
 | Google Cloud + BigQuery | Optional — curated registry (read) + job mirror (batch load; free tier friendly) |
 
@@ -29,7 +29,7 @@ Mission job boards + remote/EU aggregators      Curated employers (CSV/BigQuery)
         │  employer mission gate (cached per employer)        │
         └──────────────────────┬─────────────────────────────┘
                                ▼
-        ingest → title gate → SQLite → Gemini scoring → email
+        ingest → title gate → SQLite → LLM scoring → email
 ```
 
 Aggregator boards (Remotive, Arbeitnow, Jobicy, Himalayas, Remote OK, We Work
@@ -95,30 +95,47 @@ python main.py discover-candidates --limit 100
 
 Refresh the shipped CSV from BQ: `python tools/export_curated_registry.py`. See [CONTRIBUTING.md](CONTRIBUTING.md) for discovery flags.
 
-## Scoring (Gemini free tier)
+## Scoring (Mistral free tier)
 
-Set `GEMINI_API_KEY` from [AI Studio](https://aistudio.google.com/apikey). Create the
-key on a Google Cloud project with **billing disabled** — Google cannot charge such a
-key, so exceeding the quota returns 429 rather than a bill.
+Set `MISTRAL_API_KEY` from the [Mistral console](https://console.mistral.ai/) and verify
+it with `python main.py check-llm` (one request, using the real scoring schema). The free
+**Experiment** tier needs no card and no prepaid credit; this pipeline uses roughly 2M
+tokens/month, orders of magnitude under the allowance.
 
-Two further guardrails live in code: `GEMINI_RPM` throttles requests per minute and
-`GEMINI_DAILY_REQUEST_BUDGET` caps requests per calendar day (persisted in
-`data/gemini_usage.json`, so restarts don't reset it). When the budget runs out the
-remaining jobs simply stay unscored and are picked up on the next run.
+Use `mistral-medium-latest`, not Small. Measured against 80 already-scored jobs, Small
+agreed on `role_ok` only 52% of the time and every one of the 38 disagreements went the
+same way (too permissive), while setting `eu_hire_ok=true` for postings its own summary
+placed in Singapore, Sydney and Minsk. Five simultaneous boolean judgements from one
+prompt is more than a 24B model holds reliably.
 
-Jobs are scored in batches (`LLM_SCORE_BATCH_SIZE`) to keep request counts low;
-steady-state usage is roughly 50–150 requests/day, well inside the free tier.
+Two guardrails live in code: `LLM_RPM` throttles requests per minute and
+`LLM_DAILY_REQUEST_BUDGET` caps requests per calendar day (persisted in
+`data/llm_usage.json`, so restarts don't reset it). When the budget runs out the
+remaining jobs simply stay unscored and are picked up on the next run. If the log shows
+every call retrying on a 429, the free tier is throttling — drop `LLM_SCORE_WORKERS` to 1
+before touching the retry cap.
 
-Each call gets **one** retry (`GEMINI_MAX_RETRIES`), at temperature 0. Retries used to
+Jobs are scored in batches (`LLM_SCORE_BATCH_SIZE`) to keep request counts low; a batch
+of 8 costs ~3.3k input and ~1k output tokens, and steady-state usage is a handful of
+requests/day — only genuinely new or changed jobs are scored.
+
+The scoring schemas are authored in strict structured-output form: closed objects, every
+property required, type unions for optional fields, and none of the validation keywords
+(`minimum`, `minItems`) strict mode rejects. Range checks happen in `JobScorePayload`.
+
+Each call gets **one** retry (`LLM_MAX_RETRIES`), at temperature 0. Retries used to
 nest — two temperatures per call, several HTTP attempts each, and a failed batch
 splitting in half — so one unlucky batch of 8 jobs could spend 30 requests. A job that
 fails both attempts is emailed **unscored** in its own digest section rather than
 dropped (`DIGEST_UNSCORED_MAX` caps how many), and is retried on later runs until
 `SCORE_MAX_ATTEMPTS`. Those rows skip every score-based gate, including remote-only.
 
-Google retires pinned model ids without notice (`gemini-2.5-flash-lite` now 404s for
-new keys), so the client falls back through `GEMINI_MODEL_FALLBACKS` and logs a
-warning rather than leaving you without a digest.
+A deterministic location guard runs after every score and before anything is stored
+(`rank.location_constraints.guard_job_payload`): if the location line names one of a
+short list of common non-EU destinations and no acceptable region, `remote_ok` and
+`eu_hire_ok` are forced false regardless of what the model said. It is deliberately
+lenient — an unlisted country, an unfamiliar city, or no location at all is allowed
+through, because a few non-EU roles in the digest cost less than one missed EU opening.
 
 `MIN_COMBINED_SCORE` = digest cutoff (`0` = all scored). `SCORE_MAX_AGE_DAYS` skips stale postings.
 
@@ -148,7 +165,7 @@ Repository **secrets**:
 
 | Secret | Purpose |
 |---|---|
-| `GEMINI_API_KEY` | Scoring |
+| `MISTRAL_API_KEY` | Scoring |
 | `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_TO` | Sending the digest |
 | `GCP_SERVICE_ACCOUNT_JSON` | **Contents** of `config/service_account.json`, not a path — the file is gitignored, so the workflow recreates it and points `GOOGLE_APPLICATION_CREDENTIALS` at it |
 | `WEBSHARE_API_KEY` | Optional — proxies for Cloudflare-guarded boards (preferred over the list URL) |
@@ -178,7 +195,7 @@ To run locally on a schedule instead: `30 7 * * * cd /path/to/good_jobs_digest &
 
 - **No curated jobs** — check `registry/curated_companies.csv`, or run discovery into BigQuery.
 - **Board failures** — usually IP blocking; see proxies above.
-- **Nothing gets scored** — check `GEMINI_API_KEY`; if the daily budget is spent the log says so and the run resumes tomorrow.
+- **Nothing gets scored** — run `python main.py check-llm`; if the daily budget is spent the log says so and the run resumes tomorrow. Jobs that fail scoring are emailed unscored, so they are never lost.
 - **Indeed board missing** — `pip install python-jobspy`, or set `BOARD_INDEED_ENABLED=false`.
 
 Tests: `pip install -r requirements-dev.txt && pytest`

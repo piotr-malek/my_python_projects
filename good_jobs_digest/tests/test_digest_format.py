@@ -11,6 +11,7 @@ from digest.formatting import (
     is_new_since,
     job_bullet_line,
     job_block_lines,
+    strip_location_suffix,
 )
 from mail.markdown_html import markdown_to_html
 
@@ -148,3 +149,96 @@ def test_build_digest_counts_after_dedupe():
     md = build_markdown_digest(rows, [])
     assert "**1** openings" in md
     assert "Score **85.0**" in md
+
+
+def test_dedupe_merges_per_location_reposts():
+    """Four Speechify postings of one role — one per city, each with its own
+    canonical_job_id — are one opening, not four digest lines."""
+    cities = ["The Hague, Netherlands", "Rotterdam, Netherlands", "Utrecht, Netherlands", "Cork, Ireland"]
+    jobs = [
+        {
+            "company_name": "Speechify",
+            "title": f"Software Engineer, Data Infrastructure & Acquisition - {city}",
+            "canonical_job_id": f"canon{i}",
+            "combined_score": 70.0 + i,
+            "url": f"http://s/{i}",
+        }
+        for i, city in enumerate(cities)
+    ]
+    out = dedupe_by_company_title(jobs)
+    assert len(out) == 1
+    assert out[0]["combined_score"] == 73.0  # highest survives
+    assert out[0]["duplicate_count"] == 4
+    assert "4 postings" in job_bullet_line(out[0])
+
+
+def test_dedupe_merges_same_title_across_locations():
+    """Identical title, different location → different canonical_job_id. Keying on
+    canonical alone was letting these through as separate openings."""
+    jobs = [
+        {"company_name": "PVcase", "title": "Platform Data Engineer",
+         "canonical_job_id": "a1", "combined_score": 80.0, "url": "http://p/1"},
+        {"company_name": "PVcase", "title": "Platform Data Engineer",
+         "canonical_job_id": "b2", "combined_score": 81.0, "url": "http://p/2"},
+        {"company_name": "PVcase", "title": "Platform Data Engineer",
+         "canonical_job_id": "c3", "combined_score": 79.0, "url": "http://p/3"},
+    ]
+    out = dedupe_by_company_title(jobs)
+    assert len(out) == 1
+    assert out[0]["url"] == "http://p/2"
+    assert out[0]["duplicate_count"] == 3
+
+
+def test_dedupe_keeps_distinct_roles_that_share_a_title_stem():
+    """A dash tail is usually a specialism, not a city — these must stay separate."""
+    jobs = [
+        {"company_name": "Faire", "title": "Senior Analytics Engineer - GTM", "combined_score": 80.0},
+        {"company_name": "Faire", "title": "Senior Analytics Engineer - Marketplace", "combined_score": 81.0},
+        {"company_name": "Faire", "title": "Data Engineer - Analytics Platform", "combined_score": 82.0},
+    ]
+    assert len(dedupe_by_company_title(jobs)) == 3
+
+
+def test_location_strip_ignores_role_qualifiers_with_commas():
+    # Comma present, but the words name a role — must not be stripped.
+    assert strip_location_suffix(
+        "Impact Manager - Reporting, Data and Analytics (Acumen East)"
+    ) == "Impact Manager - Reporting, Data and Analytics (Acumen East)"
+    # No comma: a single-word tail is never treated as a location.
+    assert strip_location_suffix("Platform Engineer, FDE - NYC") == "Platform Engineer, FDE - NYC"
+    # City, country: stripped.
+    assert strip_location_suffix("Data Engineer - Munich, Germany") == "Data Engineer"
+
+
+def test_dedupe_still_merges_cross_source_by_canonical():
+    """Company spellings differ between boards; canonical_job_id is what ties
+    those together, so that path has to keep working."""
+    jobs = [
+        {"company_name": "Speechify", "title": "Data Engineer",
+         "canonical_job_id": "same", "combined_score": 70.0, "url": "http://a"},
+        {"company_name": "Speechify Inc.", "title": "Data Engineer (Remote)",
+         "canonical_job_id": "same", "combined_score": 75.0, "url": "http://b"},
+    ]
+    out = dedupe_by_company_title(jobs)
+    assert len(out) == 1
+    assert out[0]["url"] == "http://b"
+
+
+def test_single_posting_has_no_count_suffix():
+    job = {"company_name": "Co", "title": "Data Engineer", "combined_score": 80.0, "url": "http://u"}
+    out = dedupe_by_company_title([job])
+    assert "duplicate_count" not in out[0]
+    assert "postings" not in job_bullet_line(out[0])
+
+
+def test_merged_line_drops_the_city_from_the_title():
+    jobs = [
+        {"company_name": "Speechify", "title": "Software Engineer, Platform - Eindhoven, Netherlands",
+         "canonical_job_id": "a", "combined_score": 75.0, "url": "http://s/1"},
+        {"company_name": "Speechify", "title": "Software Engineer, Platform - Cork, Ireland",
+         "canonical_job_id": "b", "combined_score": 70.0, "url": "http://s/2"},
+    ]
+    line = job_bullet_line(dedupe_by_company_title(jobs)[0])
+    assert "Software Engineer, Platform**](http://s/1)" in line
+    assert "Eindhoven" not in line
+    assert "2 postings" in line
