@@ -5,8 +5,16 @@ name: good_jobs_digest — daily digest
 
 on:
   schedule:
-    # 06:30 UTC — early morning in Europe/Warsaw year round.
-    - cron: "30 6 * * *"
+    # GitHub delivers schedule events on a best-effort queue, and the top and half
+    # of the hour are the most contended slots there are. On "30 6 * * *" every run
+    # for a fortnight fired 40-55 min late, one fired 11h21m late (arriving at
+    # 19:51 local), and one never fired at all. So: odd minute, odd hour, early
+    # enough that a couple of hours of queueing still lands before the workday.
+    - cron: "17 4 * * *"
+    # Fallback for the days the morning event is dropped entirely. Whichever
+    # scheduled run gets there first sends; the other one sees it and stops (see
+    # the send-once guard below), so this costs nothing on a normal day.
+    - cron: "23 13 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -23,7 +31,47 @@ defaults:
     working-directory: good_jobs_digest
 
 jobs:
+  # Two crons mean two chances at one email, so exactly one of them may send.
+  # The check is "did a scheduled run already succeed today?" rather than a marker
+  # file, because a failed run must not suppress the retry — and a run that fails
+  # is precisely when the second chance matters.
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual run — sending regardless of what already went out today."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          today=$(date -u +%F)
+          # Only scheduled successes count: a manual dry run must not look like a
+          # digest that was delivered.
+          earlier=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/good-jobs-digest.yml/runs?event=schedule&status=success&created=${today}" \
+            --jq '.total_count' 2>/dev/null || echo "unknown")
+          if [ "$earlier" = "unknown" ]; then
+            echo "::warning::Could not read run history — sending rather than risk no digest at all."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          elif [ "$earlier" -gt 0 ]; then
+            echo "A scheduled run already succeeded today ($earlier) — standing down."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No successful scheduled run yet today — sending."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   digest:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
