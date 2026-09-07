@@ -51,7 +51,7 @@ def _client(tmp_path, script: list[object], monkeypatch) -> tuple[MistralClient,
     monkeypatch.setattr("rank.llm.time.sleep", lambda _s: None)
     settings = Settings()
     settings.MISTRAL_API_KEY = "test-key"
-    settings.MISTRAL_MODEL = "mistral-medium-latest"
+    settings.MISTRAL_MODEL = "ministral-14b-latest"
     settings.LLM_RPM = 0
     settings.LLM_USAGE_PATH = tmp_path / "usage.json"
     settings.LLM_DAILY_REQUEST_BUDGET = 100
@@ -90,7 +90,7 @@ def test_request_sends_strict_json_schema(tmp_path, monkeypatch):
 
     payload = http.posts[0]["payload"]
     assert http.posts[0]["url"] == "/chat/completions"
-    assert payload["model"] == "mistral-medium-latest"
+    assert payload["model"] == "ministral-14b-latest"
     assert payload["messages"] == [{"role": "user", "content": "prompt"}]
     fmt = payload["response_format"]
     assert fmt["type"] == "json_schema"
@@ -176,4 +176,4 @@ def test_factory_builds_a_mistral_client(tmp_path, monkeypatch):
     monkeypatch.setattr("httpx.Client", lambda **_kw: _FakeHttp([]))
     client = make_llm_client(settings)
     assert client.provider == "mistral"
-    assert client.model == "mistral-medium-latest"
+    assert client.model == "ministral-14b-latest"

@@ -4,7 +4,7 @@
 
 Every morning, a ranked list of job postings lands in your inbox — filtered for roles that fit you, at organizations that seem to care about something beyond the quarterly report.
 
-Purpose-driven work is scattered across niche boards and opaque ATS pages. This pipeline pulls from mission-oriented job boards, polls curated employer feeds, scores postings against *your* profile with an open-weight LLM (Mistral Small), and emails the shortlist.
+Purpose-driven work is scattered across niche boards and opaque ATS pages. This pipeline pulls from mission-oriented job boards, polls curated employer feeds, scores postings against *your* profile with an open-weight LLM (Mistral's Ministral 14B), and emails the shortlist.
 
 > **Heads up:** Scrapes public boards and calls third-party ATS APIs. Respect terms and rate limits. Don't commit credentials to git.
 
@@ -13,7 +13,7 @@ Purpose-driven work is scattered across niche boards and opaque ATS pages. This 
 | Thing | Why |
 |-------|-----|
 | Python 3.12+ | Runs the pipeline |
-| Mistral API key | Scores jobs (`mistral-small-latest`). The free [Experiment tier](https://console.mistral.ai/) needs no card and no prepaid credit |
+| Mistral API key | Scores jobs (`ministral-14b-latest`). The free [Experiment tier](https://console.mistral.ai/) needs no card and no prepaid credit |
 | SMTP | Email — Gmail app password works |
 | Google Cloud + BigQuery | Optional — curated registry (read) + job mirror (batch load; free tier friendly) |
 
@@ -102,11 +102,20 @@ it with `python main.py check-llm` (one request, using the real scoring schema).
 **Experiment** tier needs no card and no prepaid credit; this pipeline uses roughly 2M
 tokens/month, orders of magnitude under the allowance.
 
-Use `mistral-medium-latest`, not Small. Measured against 80 already-scored jobs, Small
-agreed on `role_ok` only 52% of the time and every one of the 38 disagreements went the
-same way (too permissive), while setting `eu_hire_ok=true` for postings its own summary
-placed in Singapore, Sydney and Minsk. Five simultaneous boolean judgements from one
-prompt is more than a 24B model holds reliably.
+Model: `ministral-14b-latest`. Since 2026-09-04 the free tier answers every
+`mistral-small`/`mistral-medium` call with 429 and `x-ratelimit-limit-req-minute: 0` —
+the allowance is zero, not spent — which broke eight consecutive runs. The ministral
+family still serves (14b at 30 req/min) and honours strict `json_schema`.
+
+Expect the fit booleans to be the weak point. Measured against 80 already-scored jobs,
+the 24B Small agreed on `role_ok` only 52% of the time, with all 38 disagreements in the
+same direction (too permissive), and set `eu_hire_ok=true` for postings its own summary
+placed in Singapore, Sydney and Minsk; 14b is smaller still. That is what the
+deterministic location guard below is for. For a stronger model, add a card in the
+Mistral console — billing is postpaid with no minimum and no prepaid credit — and set
+`MISTRAL_MODEL=mistral-medium-3` (note the `-3`; `-latest` now resolves to 3.5 at
+$1.50/$7.50 per M, five times the price for no gain here). At this pipeline's volume
+that is roughly $0.31-1.54/month.
 
 Two guardrails live in code: `LLM_RPM` throttles requests per minute and
 `LLM_DAILY_REQUEST_BUDGET` caps requests per calendar day (persisted in

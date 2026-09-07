@@ -30,11 +30,18 @@ class Settings:
     def __init__(self):
         # Mistral La Plateforme. The free "Experiment" tier needs no card and no
         # prepaid credit, and this pipeline uses ~2M tokens/month against it.
-        # mistral-medium-latest holds the fit booleans (eu_hire_ok, seniority_ok,
-        # role_ok) far better than Small, which agreed with the previous scorer on
-        # role_ok barely half the time and flipped it one way only.
+        #
+        # ministral-14b, not medium or small: as of 2026-09-04 the free tier answers
+        # every mistral-small/medium call with 429 and a header that says the quota
+        # is the problem — "x-ratelimit-limit-req-minute: 0", i.e. the allowance is
+        # zero, not spent. The ministral family still serves (14b at 30 req/min) and
+        # honours strict json_schema. It is a smaller model than the 24B Small that
+        # already agreed with the previous scorer on role_ok only half the time, so
+        # the location guard in rank/location_constraints.py matters more than ever.
+        # Paying is the alternative: Mistral bills postpaid on a card with no minimum
+        # and no prepaid credit, and mistral-medium-3 runs ~$0.31-1.54/month here.
         self.MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
-        self.MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-medium-latest")
+        self.MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "ministral-14b-latest")
         self.MISTRAL_BASE_URL = os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1").rstrip(
             "/"
         )
