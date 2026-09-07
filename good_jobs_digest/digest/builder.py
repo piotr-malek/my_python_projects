@@ -79,8 +79,18 @@ def _health_footer(
         budget = llm_usage.get("budget")
         provider = str(llm_usage.get("provider") or "LLM")
         label = provider.capitalize() if provider.islower() else provider
-        cap = f"{used}/{budget}" if budget else str(used)
-        lines += [f"{label} requests today: **{cap}**.", ""]
+        if used is not None:
+            cap = f"{used}/{budget}" if budget else str(used)
+            lines += [f"{label} requests today: **{cap}**.", ""]
+        # An outage has to be legible in the email itself: an inbox with no digest,
+        # or a digest of unscored jobs and no explanation, both read as "quiet day".
+        if llm_usage.get("error"):
+            lines += [
+                f"**{label} was unreachable today** — {llm_usage['error']}. "
+                "Anything under Unscored got the title filter only; scoring is "
+                "retried on the next run.",
+                "",
+            ]
     return lines
 
 

@@ -167,9 +167,11 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python main.py check-email
 
-      # Same reasoning for the LLM: one request proves the key works and that the
-      # provider accepts the scoring schema, instead of finding out mid-run.
-      - name: Verify LLM credentials
+      # One request proves the key works and that the provider accepts the scoring
+      # schema. Advisory on purpose: it warns and the run continues, so a provider
+      # outage yields a digest of unscored jobs with an explanation in the footer
+      # rather than no email at all.
+      - name: Check LLM credentials (advisory)
         env:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: python main.py check-llm

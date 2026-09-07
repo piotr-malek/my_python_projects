@@ -16,6 +16,7 @@ from config import settings
 from profile.preferences import build_scoring_input, digest_remote_only, load_preferences
 from digest.builder import build_markdown_digest
 from mail.mailer import JobDigestMailer
+from core import llm_health
 from core.curated import CURATED_ATS_TYPES, load_curated_board_keys
 from digest.formatting import dedupe_by_company_title
 from digest.selection import exclude_already_sent
@@ -237,6 +238,18 @@ def cmd_score(args: argparse.Namespace) -> None:
             )
     if bq and settings.BQ_WRITE_LLM_SCORES:
         bq.flush_llm_scores()
+    if rows:
+        # The preflight is one request against a toy job; this is the real evidence.
+        # "Nothing scored, something tried" is what a provider outage looks like.
+        if ok:
+            llm_health.record(settings, ok=True)
+        elif skipped:
+            detail = (
+                "daily request budget spent"
+                if scorer.budget_exhausted
+                else f"all {skipped} scoring call(s) failed"
+            )
+            llm_health.record(settings, ok=False, detail=detail)
     logger.info(
         "Score finished (%s ok, %s skipped, %s location-guarded)", ok, skipped, guarded
     )
@@ -326,6 +339,12 @@ def cmd_digest(args: argparse.Namespace) -> None:
                 }
         except (OSError, json.JSONDecodeError):
             llm_usage = None
+    health = llm_health.read(settings)
+    if health and not health["ok"]:
+        # Say it in the email. Silence is what made a five-day provider outage
+        # look like five quiet days.
+        logger.warning("LLM was unreachable today (%s) — noting it in the digest", health["detail"])
+        llm_usage = {**(llm_usage or {"provider": PROVIDER_NAME}), "error": health["detail"]}
 
     text = build_markdown_digest(
         curated_rows,
@@ -397,11 +416,27 @@ def cmd_check_llm(args: argparse.Namespace) -> None:
     Uses the actual SCORE_JSON_SCHEMA rather than a toy one: every provider takes
     a different dialect of JSON Schema, so a rejected schema is the likeliest way
     a provider switch fails — and it would otherwise surface ~7 minutes into a
-    run, after all the ingest work, as a digest full of unscored jobs.
+    run, after all the ingest work.
+
+    Advisory by default. This check aborting the run is how five consecutive days
+    produced no email at all when the provider stopped serving our model: an
+    empty inbox is indistinguishable from a quiet week. A failure is now recorded
+    and reported in the digest footer, and the run continues so the day's jobs go
+    out unscored. Pass --strict to fail the command instead.
     """
+    from core import llm_health
     from normalize.schema import JobScorePayload
     from rank.llm import make_llm_client
     from rank.scorer import SCORE_JSON_SCHEMA
+
+    def _degraded(reason: str) -> None:
+        llm_health.record(settings, ok=False, detail=reason)
+        if getattr(args, "strict", False):
+            raise SystemExit(f"LLM check failed: {reason}")
+        logger.warning(
+            "LLM check failed: %s — continuing; today's jobs will be emailed unscored",
+            reason,
+        )
 
     prompt = (
         "Score this job for a remote EU-based senior analytics engineer. "
@@ -413,13 +448,16 @@ def cmd_check_llm(args: argparse.Namespace) -> None:
         client = make_llm_client(settings)
         out = client.generate_json(prompt, schema=SCORE_JSON_SCHEMA)
     except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f"LLM check failed: {exc}") from exc
+        return _degraded(str(exc))
     if out is None:
-        raise SystemExit("LLM check failed: no JSON came back (see the warning above)")
+        # Phrased for the digest footer, not the log: "see above" means nothing
+        # in an email.
+        return _degraded("no usable response from the provider (details in the run log)")
     try:
         JobScorePayload.model_validate(out)
     except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f"LLM check failed: response did not match the score schema: {exc}") from exc
+        return _degraded(f"response did not match the score schema: {exc}")
+    llm_health.record(settings, ok=True)
     logger.info(
         "LLM OK: %s (%s) returned a valid score; %s request(s) used today",
         client.provider,
@@ -462,6 +500,9 @@ def main() -> None:
     p_check.set_defaults(func=cmd_check_email)
 
     p_check_llm = sub.add_parser("check-llm", help="Verify the LLM key and schema mode (1 request)")
+    p_check_llm.add_argument(
+        "--strict", action="store_true", help="Exit non-zero when the check fails"
+    )
     p_check_llm.set_defaults(func=cmd_check_llm)
 
     p_digest = sub.add_parser("digest", help="Build ranked digest (two sections) and email")

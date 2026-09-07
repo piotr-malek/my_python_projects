@@ -102,6 +102,12 @@ it with `python main.py check-llm` (one request, using the real scoring schema).
 **Experiment** tier needs no card and no prepaid credit; this pipeline uses roughly 2M
 tokens/month, orders of magnitude under the allowance.
 
+`check-llm` is **advisory**: it warns and lets the run continue, because a provider
+outage used to abort the run and email nothing, and an empty inbox is indistinguishable
+from a quiet week. A failed check is recorded in `data/llm_health.json`, the day's jobs
+go out **unscored**, and the digest footer says the provider was unreachable. Add
+`--strict` to make it exit non-zero when running it by hand.
+
 Model: `ministral-14b-latest`. Since 2026-09-04 the free tier answers every
 `mistral-small`/`mistral-medium` call with 429 and `x-ratelimit-limit-req-minute: 0` —
 the allowance is zero, not spent — which broke eight consecutive runs. The ministral
