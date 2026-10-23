@@ -47,7 +47,7 @@ from normalize.boards import (
 from discovery.employer_candidates import mine_employer_candidate
 from core.persist import persist_normalized_job
 from rank.prefilter import prefilter_title
-from pipelines.job_boards.sources.climatebase import JOB_DETAIL_URL, JOBS_URL, _parse_next_data
+from pipelines.job_boards.sources.climatebase import JOB_DETAIL_URL, JOBS_URL, _normalize_detail, _parse_next_data
 from pipelines.job_boards.sources.eighty_k_hours import (
     ALGOLIA_API_KEY,
     ALGOLIA_APP_ID,
@@ -311,7 +311,10 @@ def _ingest_climatebase(
                         headers={**BROWSER_HEADERS, "Referer": JOBS_URL},
                     )
                     dpayload = _parse_next_data(dresp.text)
-                    detail = dpayload.get("props", {}).get("pageProps", {})
+                    # raw pageProps keeps the text under sanitizedJobDescription / data.description;
+                    # the normalizer reads the renamed keys _normalize_detail produces
+                    page_props = dpayload.get("props", {}).get("pageProps", {})
+                    detail = _normalize_detail(page_props) if page_props else None
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Climatebase detail %s: %s", jid, exc)
         norm = normalize_climatebase_listing(listing, detail)
