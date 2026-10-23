@@ -5,16 +5,15 @@ name: good_jobs_digest — daily digest
 
 on:
   schedule:
-    # GitHub delivers schedule events on a best-effort queue, and the top and half
-    # of the hour are the most contended slots there are. On "30 6 * * *" every run
-    # for a fortnight fired 40-55 min late, one fired 11h21m late (arriving at
-    # 19:51 local), and one never fired at all. So: odd minute, odd hour, early
-    # enough that a couple of hours of queueing still lands before the workday.
-    - cron: "17 4 * * *"
-    # Fallback for the days the morning event is dropped entirely. Whichever
+    # GitHub delivers schedule events on a best-effort queue. On this repo they have
+    # fired 3-8 hours late (October 2026, every day), and on "30 6 * * *" one never
+    # fired at all. So: odd minutes, and early. Targets Taiwan (UTC+8), where a
+    # digest any time between ~midnight and 07:00 is fine.
+    - cron: "47 15 * * *"   # 23:47 Taipei; with the usual delay it lands ~03:00-08:00
+    # Backup for the days the first event is dropped or very late. Whichever
     # scheduled run gets there first sends; the other one sees it and stops (see
     # the send-once guard below), so this costs nothing on a normal day.
-    - cron: "23 13 * * *"
+    - cron: "17 19 * * *"   # 03:17 Taipei
   workflow_dispatch:
     inputs:
       dry_run:
@@ -52,20 +51,23 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          today=$(date -u +%F)
+          # "Today" is the last 12 hours, not a UTC date: both crons serve one
+          # Taiwan morning but can land on different UTC dates. They fire ~3.5 h
+          # apart and runs are ~24 h apart, so 12 h separates the days cleanly.
+          since=$(date -u -d '12 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           # Only scheduled successes count: a manual dry run must not look like a
           # digest that was delivered.
           earlier=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/good-jobs-digest.yml/runs?event=schedule&status=success&created=${today}" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/good-jobs-digest.yml/runs?event=schedule&status=success&created=%3E%3D${since}" \
             --jq '.total_count' 2>/dev/null || echo "unknown")
           if [ "$earlier" = "unknown" ]; then
             echo "::warning::Could not read run history — sending rather than risk no digest at all."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           elif [ "$earlier" -gt 0 ]; then
-            echo "A scheduled run already succeeded today ($earlier) — standing down."
+            echo "A scheduled run already succeeded in the last 12 h ($earlier) — standing down."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "No successful scheduled run yet today — sending."
+            echo "No successful scheduled run in the last 12 h — sending."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           fi
 
